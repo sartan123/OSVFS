@@ -1,0 +1,119 @@
+name: PR Build and Test
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  NUGET_XMLDOC_MODE: skip
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-and-unit-test:
+    name: Build & Unit Tests
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/packages.lock.json', 'Directory.Packages.props', 'global.json') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Restore (locked)
+        run: dotnet restore S3Files.Windows.slnx --locked-mode
+
+      - name: Build (Release)
+        run: dotnet build S3Files.Windows.slnx --configuration Release --no-restore
+
+      - name: Unit tests
+        run: >
+          dotnet test tests/S3Files.Windows.UnitTests/S3Files.Windows.UnitTests.csproj
+          --configuration Release
+          --no-build
+          --logger "trx;LogFileName=unit.trx"
+          --logger "console;verbosity=normal"
+          --results-directory TestResults
+
+      - name: Upload unit test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: TestResults/*.trx
+          if-no-files-found: warn
+
+  integration-test:
+    name: Integration Tests (LocalStack)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/packages.lock.json', 'Directory.Packages.props', 'global.json') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Switch Docker to Linux engine
+        shell: pwsh
+        run: |
+          & "$Env:ProgramFiles\Docker\Docker\DockerCli.exe" -SwitchLinuxEngine
+          docker version
+          docker info --format '{{.OSType}}'
+
+      - name: Restore (locked)
+        run: dotnet restore S3Files.Windows.slnx --locked-mode
+
+      - name: Build integration tests (Release)
+        run: >
+          dotnet build tests/S3Files.Windows.IntegrationTests/S3Files.Windows.IntegrationTests.csproj
+          --configuration Release
+          --no-restore
+
+      - name: Integration tests
+        run: >
+          dotnet test tests/S3Files.Windows.IntegrationTests/S3Files.Windows.IntegrationTests.csproj
+          --configuration Release
+          --no-build
+          --logger "trx;LogFileName=integration.trx"
+          --logger "console;verbosity=normal"
+          --results-directory TestResults
+
+      - name: Upload integration test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results
+          path: TestResults/*.trx
+          if-no-files-found: warn
