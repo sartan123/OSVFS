@@ -95,6 +95,40 @@ internal sealed class S3Backend(string bucketName, string? endpointUrl = null) :
         while (!string.IsNullOrEmpty(request.ContinuationToken));
     }
 
+    public async IAsyncEnumerable<S3ObjectInfo> ListRecursiveAsync(
+        string relativeDirectory,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        var prefix = S3Util.NormalizePrefix(relativeDirectory);
+        var request = new ListObjectsV2Request
+        {
+            BucketName = bucketName,
+            Prefix = prefix,
+        };
+
+        do
+        {
+            var response = await client.ListObjectsV2Async(request, ct).ConfigureAwait(false);
+
+            if (response.S3Objects is { } s3Objects)
+            {
+                foreach (var obj in s3Objects)
+                {
+                    if (string.IsNullOrEmpty(obj.Key) || obj.Key.EndsWith('/')) continue;
+                    yield return new S3ObjectInfo(
+                        Key: obj.Key,
+                        RelativePath: S3Util.ToRelativePath(obj.Key),
+                        Size: obj.Size ?? 0,
+                        LastModified: obj.LastModified ?? default,
+                        ETag: obj.ETag ?? string.Empty,
+                        IsDirectory: false);
+                }
+            }
+            request.ContinuationToken = response.NextContinuationToken;
+        }
+        while (!string.IsNullOrEmpty(request.ContinuationToken));
+    }
+
     public async Task<S3ObjectInfo?> HeadAsync(string relativePath, CancellationToken ct)
     {
         var key = S3Util.ToS3Key(relativePath);
@@ -157,14 +191,186 @@ internal sealed class S3Backend(string bucketName, string? endpointUrl = null) :
         await resp.ResponseStream.CopyToAsync(destination, ct).ConfigureAwait(false);
     }
 
-    public Task<UploadResult> UploadAsync(string relativePath, Stream content, string? ifMatchETag, CancellationToken ct) =>
-        throw new NotImplementedException();
+    public async Task<UploadResult> UploadAsync(
+        string relativePath, Stream content, string? ifMatchETag, CancellationToken ct)
+    {
+        var key = S3Util.ToS3Key(relativePath);
+        if (string.IsNullOrEmpty(key))
+        {
+            throw new ArgumentException("Cannot upload to empty key.", nameof(relativePath));
+        }
 
-    public Task DeleteAsync(string relativePath, CancellationToken ct) =>
-        throw new NotImplementedException();
+        var request = new PutObjectRequest
+        {
+            BucketName = bucketName,
+            Key = key,
+            InputStream = content,
+            AutoCloseStream = false,
+        };
+        if (!string.IsNullOrEmpty(ifMatchETag))
+        {
+            request.IfMatch = ifMatchETag;
+        }
 
-    public Task RenameAsync(string oldRelativePath, string newRelativePath, CancellationToken ct) =>
-        throw new NotImplementedException();
+        var resp = await client.PutObjectAsync(request, ct).ConfigureAwait(false);
+
+        var size = content.CanSeek ? content.Length : 0L;
+        return new UploadResult(
+            ETag: resp.ETag ?? string.Empty,
+            VersionId: resp.VersionId ?? string.Empty,
+            Size: size,
+            LastModified: DateTimeOffset.UtcNow);
+    }
+
+    public async Task DeleteAsync(string relativePath, CancellationToken ct)
+    {
+        var key = S3Util.ToS3Key(relativePath);
+        if (string.IsNullOrEmpty(key)) return;
+
+        try
+        {
+            await client.DeleteObjectAsync(new DeleteObjectRequest
+            {
+                BucketName = bucketName,
+                Key = key,
+            }, ct).ConfigureAwait(false);
+        }
+        catch (AmazonS3Exception ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            // Already gone — treat as success.
+        }
+    }
+
+    public async Task DeletePrefixAsync(string relativeDirectory, CancellationToken ct)
+    {
+        var prefix = S3Util.NormalizePrefix(relativeDirectory);
+        if (prefix.Length == 0) return;
+
+        var batch = new List<KeyVersion>(capacity: 1000);
+        var request = new ListObjectsV2Request
+        {
+            BucketName = bucketName,
+            Prefix = prefix,
+        };
+
+        do
+        {
+            var response = await client.ListObjectsV2Async(request, ct).ConfigureAwait(false);
+            if (response.S3Objects is { } s3Objects)
+            {
+                foreach (var obj in s3Objects)
+                {
+                    if (string.IsNullOrEmpty(obj.Key)) continue;
+                    batch.Add(new KeyVersion { Key = obj.Key });
+                    if (batch.Count == 1000)
+                    {
+                        await FlushDeleteBatchAsync(batch, ct).ConfigureAwait(false);
+                    }
+                }
+            }
+            request.ContinuationToken = response.NextContinuationToken;
+        }
+        while (!string.IsNullOrEmpty(request.ContinuationToken));
+
+        if (batch.Count > 0)
+        {
+            await FlushDeleteBatchAsync(batch, ct).ConfigureAwait(false);
+        }
+    }
+
+    public async Task RenameAsync(string oldRelativePath, string newRelativePath, CancellationToken ct)
+    {
+        var oldKey = S3Util.ToS3Key(oldRelativePath);
+        var newKey = S3Util.ToS3Key(newRelativePath);
+        if (string.IsNullOrEmpty(oldKey) || string.IsNullOrEmpty(newKey)) return;
+        if (string.Equals(oldKey, newKey, StringComparison.Ordinal)) return;
+
+        await client.CopyObjectAsync(new CopyObjectRequest
+        {
+            SourceBucket = bucketName,
+            SourceKey = oldKey,
+            DestinationBucket = bucketName,
+            DestinationKey = newKey,
+        }, ct).ConfigureAwait(false);
+
+        await client.DeleteObjectAsync(new DeleteObjectRequest
+        {
+            BucketName = bucketName,
+            Key = oldKey,
+        }, ct).ConfigureAwait(false);
+    }
+
+    public async Task RenamePrefixAsync(
+        string oldRelativeDirectory, string newRelativeDirectory, CancellationToken ct)
+    {
+        var oldPrefix = S3Util.NormalizePrefix(oldRelativeDirectory);
+        var newPrefix = S3Util.NormalizePrefix(newRelativeDirectory);
+        if (oldPrefix.Length == 0 || newPrefix.Length == 0) return;
+        if (string.Equals(oldPrefix, newPrefix, StringComparison.Ordinal)) return;
+
+        var keys = new List<string>();
+        var request = new ListObjectsV2Request
+        {
+            BucketName = bucketName,
+            Prefix = oldPrefix,
+        };
+        do
+        {
+            var response = await client.ListObjectsV2Async(request, ct).ConfigureAwait(false);
+            if (response.S3Objects is { } s3Objects)
+            {
+                foreach (var obj in s3Objects)
+                {
+                    if (!string.IsNullOrEmpty(obj.Key))
+                    {
+                        keys.Add(obj.Key);
+                    }
+                }
+            }
+            request.ContinuationToken = response.NextContinuationToken;
+        }
+        while (!string.IsNullOrEmpty(request.ContinuationToken));
+
+        foreach (var oldKey in keys)
+        {
+            var suffix = oldKey[oldPrefix.Length..];
+            var newKey = newPrefix + suffix;
+            await client.CopyObjectAsync(new CopyObjectRequest
+            {
+                SourceBucket = bucketName,
+                SourceKey = oldKey,
+                DestinationBucket = bucketName,
+                DestinationKey = newKey,
+            }, ct).ConfigureAwait(false);
+        }
+
+        if (keys.Count == 0) return;
+
+        var batch = new List<KeyVersion>(capacity: Math.Min(keys.Count, 1000));
+        foreach (var key in keys)
+        {
+            batch.Add(new KeyVersion { Key = key });
+            if (batch.Count == 1000)
+            {
+                await FlushDeleteBatchAsync(batch, ct).ConfigureAwait(false);
+            }
+        }
+        if (batch.Count > 0)
+        {
+            await FlushDeleteBatchAsync(batch, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task FlushDeleteBatchAsync(List<KeyVersion> batch, CancellationToken ct)
+    {
+        await client.DeleteObjectsAsync(new DeleteObjectsRequest
+        {
+            BucketName = bucketName,
+            Objects = batch,
+            Quiet = true,
+        }, ct).ConfigureAwait(false);
+        batch.Clear();
+    }
 
     private static AmazonS3Client CreateClient(string? endpointUrl)
     {

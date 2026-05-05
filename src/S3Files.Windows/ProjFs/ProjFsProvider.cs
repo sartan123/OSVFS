@@ -208,6 +208,94 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         }
     }
 
+    public void HandleFileModified(string relativePath, bool isDirectory)
+    {
+        if (Options.ReadOnly || isDirectory || string.IsNullOrEmpty(relativePath)) return;
+
+        var fullPath = Path.Combine(syncRootPath, relativePath);
+        if (!File.Exists(fullPath))
+        {
+            logger.LogDebug("Modified notification but file missing: {RelativePath}", relativePath);
+            return;
+        }
+
+        try
+        {
+            using var stream = new FileStream(
+                fullPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                bufferSize: 81920,
+                FileOptions.SequentialScan);
+
+            backend.UploadAsync(relativePath, stream, ifMatchETag: null, CancellationToken.None)
+                .GetAwaiter().GetResult();
+
+            logger.LogInformation("Uploaded {RelativePath} ({Size} bytes)", relativePath, stream.Length);
+        }
+        catch (FileNotFoundException)
+        {
+            logger.LogDebug("File vanished before upload: {RelativePath}", relativePath);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Upload failed for {RelativePath}", relativePath);
+        }
+    }
+
+    public void HandleFileDeleted(string relativePath, bool isDirectory)
+    {
+        if (Options.ReadOnly || string.IsNullOrEmpty(relativePath)) return;
+
+        try
+        {
+            if (isDirectory)
+            {
+                backend.DeletePrefixAsync(relativePath, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                logger.LogInformation("Deleted prefix {RelativePath}/", relativePath);
+            }
+            else
+            {
+                backend.DeleteAsync(relativePath, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                logger.LogInformation("Deleted {RelativePath}", relativePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Delete failed for {RelativePath}", relativePath);
+        }
+    }
+
+    public void HandleFileRenamed(string oldRelativePath, string newRelativePath, bool isDirectory)
+    {
+        if (Options.ReadOnly) return;
+        if (string.IsNullOrEmpty(oldRelativePath) || string.IsNullOrEmpty(newRelativePath)) return;
+
+        try
+        {
+            if (isDirectory)
+            {
+                backend.RenamePrefixAsync(oldRelativePath, newRelativePath, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                logger.LogInformation(
+                    "Renamed prefix {Old}/ -> {New}/", oldRelativePath, newRelativePath);
+            }
+            else
+            {
+                backend.RenameAsync(oldRelativePath, newRelativePath, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                logger.LogInformation("Renamed {Old} -> {New}", oldRelativePath, newRelativePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Rename failed for {Old} -> {New}", oldRelativePath, newRelativePath);
+        }
+    }
+
     private void EnsureVirtualizationRoot()
     {
         if (!Directory.Exists(syncRootPath))

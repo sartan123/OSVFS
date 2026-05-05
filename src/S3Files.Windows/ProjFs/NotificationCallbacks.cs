@@ -126,6 +126,10 @@ internal sealed class NotificationCallbacks
         out NotificationType notificationMask)
     {
         notificationMask = NotificationType.UseExistingMask;
+        if (!ReadOnly)
+        {
+            provider.HandleFileRenamed(relativePath, destinationPath, isDirectory);
+        }
     }
 
     public void OnHardlinkCreated(
@@ -152,7 +156,19 @@ internal sealed class NotificationCallbacks
         uint triggeringProcessId,
         string triggeringProcessImageFileName)
     {
-        // TODO: write-back to S3 when isFileModified, delete on S3 when isFileDeleted
+        if (ReadOnly) return;
+
+        // Deletion takes precedence: a deleted file cannot be uploaded.
+        if (isFileDeleted)
+        {
+            provider.HandleFileDeleted(relativePath, isDirectory);
+            return;
+        }
+
+        if (isFileModified)
+        {
+            provider.HandleFileModified(relativePath, isDirectory);
+        }
     }
 
     public bool OnFilePreConvertToFull(

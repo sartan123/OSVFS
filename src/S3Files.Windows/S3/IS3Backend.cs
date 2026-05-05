@@ -8,6 +8,8 @@ internal interface IS3Backend
 
     IAsyncEnumerable<S3ObjectInfo> ListAllAsync(CancellationToken ct);
 
+    IAsyncEnumerable<S3ObjectInfo> ListRecursiveAsync(string relativeDirectory, CancellationToken ct);
+
     Task<S3ObjectInfo?> HeadAsync(string relativePath, CancellationToken ct);
 
     Task ReadRangeAsync(string relativePath, long offset, long length, Stream destination, CancellationToken ct);
@@ -16,5 +18,9 @@ internal interface IS3Backend
 
     Task DeleteAsync(string relativePath, CancellationToken ct);
 
+    Task DeletePrefixAsync(string relativeDirectory, CancellationToken ct);
+
     Task RenameAsync(string oldRelativePath, string newRelativePath, CancellationToken ct);
+
+    Task RenamePrefixAsync(string oldRelativeDirectory, string newRelativeDirectory, CancellationToken ct);
 }
