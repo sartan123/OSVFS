@@ -18,6 +18,7 @@ internal sealed class LostAndFoundQuarantine(
         Path.Combine(syncRootPath, S3ChangeWatcher.LostAndFoundDirectoryName);
     private readonly string syncRootPath = syncRootPath;
 
+    /// <inheritdoc/>
     public bool TryQuarantine(string relativePath)
     {
         if (string.IsNullOrEmpty(relativePath)) return false;

@@ -2,15 +2,23 @@ using System.Text;
 
 namespace S3Files.Windows.S3;
 
+/// <summary>
+/// Conversion helpers between Windows-style relative paths and S3 keys, plus a
+/// handful of constants shared by the backend and the virtualization layer.
+/// </summary>
 internal static class S3Util
 {
-    /// <summary>Streams at or above this size are routed through TransferUtility's multipart
+    /// <summary>
+    /// Streams at or above this size are routed through TransferUtility's multipart
     /// path. Picked to be well above the S3 5 MiB minimum part size so the multipart overhead
-    /// is worth paying.</summary>
+    /// is worth paying.
+    /// </summary>
     public const long MultipartThresholdBytes = 8L * 1024 * 1024;
 
-    /// <summary>Per-part size for multipart uploads. Must be ≥ 5 MiB to satisfy the S3
-    /// minimum; the last part is allowed to be smaller.</summary>
+    /// <summary>
+    /// Per-part size for multipart uploads. Must be ≥ 5 MiB to satisfy the S3
+    /// minimum; the last part is allowed to be smaller.
+    /// </summary>
     public const long MultipartPartSizeBytes = 5L * 1024 * 1024;
 
     /// <summary>
@@ -20,12 +28,22 @@ internal static class S3Util
     /// </summary>
     public const int ContentIdLength = 16;
 
+    /// <summary>
+    /// Converts a Windows relative path to an S3 key by swapping separators.
+    /// </summary>
     public static string ToS3Key(string relativePath) =>
         string.IsNullOrEmpty(relativePath) ? string.Empty : relativePath.Replace('\\', '/');
 
+    /// <summary>
+    /// Converts an S3 key to a Windows relative path by swapping separators.
+    /// </summary>
     public static string ToRelativePath(string s3Key) =>
         s3Key.Replace('/', '\\');
 
+    /// <summary>
+    /// Normalizes a relative directory to an S3 prefix terminated with a trailing
+    /// slash; the empty input is returned as the empty string.
+    /// </summary>
     public static string NormalizePrefix(string relativeDirectory)
     {
         var prefix = ToS3Key(relativeDirectory);
@@ -49,8 +67,10 @@ internal static class S3Util
         return result;
     }
 
-    /// <summary>Returns the trailing-slash-terminated linked prefix, or the empty string when
-    /// no prefix is configured. Always lives in S3 key form (forward-slash separated).</summary>
+    /// <summary>
+    /// Returns the trailing-slash-terminated linked prefix, or the empty string when
+    /// no prefix is configured. Always lives in S3 key form (forward-slash separated).
+    /// </summary>
     public static string NormalizeKeyPrefix(string? prefix)
     {
         if (string.IsNullOrEmpty(prefix)) return string.Empty;
@@ -58,20 +78,26 @@ internal static class S3Util
         return trimmed.Length == 0 ? string.Empty : trimmed + "/";
     }
 
-    /// <summary>Maps a virt-root-relative key (or empty) to the full S3 key applied against
-    /// the bucket. The empty input maps to the prefix itself (typically used as a list root).</summary>
+    /// <summary>
+    /// Maps a virt-root-relative key (or empty) to the full S3 key applied against
+    /// the bucket. The empty input maps to the prefix itself (typically used as a list root).
+    /// </summary>
     public static string FullKey(string keyPrefix, string relativeKey) =>
         relativeKey.Length == 0 ? keyPrefix : keyPrefix + relativeKey;
 
-    /// <summary>Maps a virt-root-relative directory to the full prefix used for List operations.
+    /// <summary>
+    /// Maps a virt-root-relative directory to the full prefix used for List operations.
     /// The empty directory yields the linked prefix itself, so an empty bucket and an empty
-    /// linked prefix both list the same way.</summary>
+    /// linked prefix both list the same way.
+    /// </summary>
     public static string FullPrefix(string keyPrefix, string relativeDirectory) =>
         keyPrefix + NormalizePrefix(relativeDirectory);
 
-    /// <summary>Strips the linked prefix back off a full S3 key. Defensive: keys that don't
+    /// <summary>
+    /// Strips the linked prefix back off a full S3 key. Defensive: keys that don't
     /// start with the prefix are returned unchanged so a misrouted result is surfaced rather
-    /// than silently mapped to a bogus relative path.</summary>
+    /// than silently mapped to a bogus relative path.
+    /// </summary>
     public static string StripPrefix(string keyPrefix, string fullKey)
     {
         if (keyPrefix.Length == 0) return fullKey;

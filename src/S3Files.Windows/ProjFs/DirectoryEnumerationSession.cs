@@ -1,8 +1,10 @@
 using Microsoft.Windows.ProjFS;
 using S3Files.Windows.S3;
 
-namespace S3Files.Windows.ProjFs;
-
+/// <summary>
+/// Per-enumeration cursor that holds the sorted child list, current filter, and
+/// position so successive ProjFS Get/End callbacks can resume mid-listing.
+/// </summary>
 internal sealed class DirectoryEnumerationSession
 {
     private readonly List<S3ObjectInfo> entries;
@@ -10,12 +12,20 @@ internal sealed class DirectoryEnumerationSession
     private bool filterSet;
     private int index;
 
+    /// <summary>
+    /// Stores the entries and pre-sorts them with ProjFS's filename comparer so the
+    /// listing order is consistent with what NTFS would return.
+    /// </summary>
     public DirectoryEnumerationSession(List<S3ObjectInfo> entries)
     {
         this.entries = entries;
         this.entries.Sort(static (a, b) => Utils.FileNameCompare(GetLeafName(a), GetLeafName(b)));
     }
 
+    /// <summary>
+    /// Resets the cursor and replaces the active filter; called when ProjFS asks
+    /// for a restart-scan.
+    /// </summary>
     public void Restart(string? newFilter)
     {
         index = 0;
@@ -23,6 +33,10 @@ internal sealed class DirectoryEnumerationSession
         filterSet = true;
     }
 
+    /// <summary>
+    /// Sets the filter on first use, but ignores subsequent filters per the ProjFS
+    /// contract that the filter is fixed for the duration of an enumeration.
+    /// </summary>
     public void EnsureFilter(string? newFilter)
     {
         if (filterSet) return;
@@ -30,6 +44,10 @@ internal sealed class DirectoryEnumerationSession
         filterSet = true;
     }
 
+    /// <summary>
+    /// Advances past non-matching entries and returns the next match; false when
+    /// the listing is exhausted.
+    /// </summary>
     public bool TryGetCurrent(out S3ObjectInfo entry, out string leafName)
     {
         while (index < entries.Count)
@@ -49,8 +67,14 @@ internal sealed class DirectoryEnumerationSession
         return false;
     }
 
+    /// <summary>
+    /// Steps the cursor past the current entry, signaling acceptance.
+    /// </summary>
     public void Advance() => index++;
 
+    /// <summary>
+    /// Extracts the leaf name from a backslash-separated relative path.
+    /// </summary>
     private static string GetLeafName(S3ObjectInfo info)
     {
         var slash = info.RelativePath.LastIndexOf('\\');

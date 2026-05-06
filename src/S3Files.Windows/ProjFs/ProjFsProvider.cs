@@ -8,8 +8,15 @@ using System.Collections.Concurrent;
 
 namespace S3Files.Windows.ProjFs;
 
+/// <summary>
+/// ProjFS callback host that bridges the virtualization instance to the S3 backend
+/// and the change watcher. Owns the lifetime of every long-lived collaborator.
+/// </summary>
 internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
 {
+    /// <summary>
+    /// Provider identifier embedded in every placeholder we write.
+    /// </summary>
     private static readonly byte[] ProviderId = [1];
 
     private readonly ILogger<ProjFsProvider> logger;
@@ -23,13 +30,23 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
 
     private bool virtualizationInstanceStarted;
 
+    /// <summary>
+    /// Effective options the provider was constructed with.
+    /// </summary>
     public ProjFsProviderOptions Options { get; }
 
+    /// <summary>
+    /// Convenience constructor that disables loggers for collaborator components.
+    /// </summary>
     public ProjFsProvider(ProjFsProviderOptions options, ILogger<ProjFsProvider> logger)
         : this(options, logger, NullLoggerFactory.Instance)
     {
     }
 
+    /// <summary>
+    /// Constructs the provider, marks the directory as a virtualization root, and
+    /// wires up notification mappings without yet starting virtualization.
+    /// </summary>
     public ProjFsProvider(
         ProjFsProviderOptions options,
         ILogger<ProjFsProvider> logger,
@@ -73,6 +90,9 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         changeWatcher = CreateChangeWatcher();
     }
 
+    /// <summary>
+    /// Stops the change watcher, halts virtualization, and disposes the backend.
+    /// </summary>
     public void Dispose()
     {
         if (changeWatcher is not null)
@@ -102,6 +122,10 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         backend.Dispose();
     }
 
+    /// <summary>
+    /// Verifies the bucket safety preconditions, starts virtualization, and kicks
+    /// off the background change watcher. Returns false on any startup failure.
+    /// </summary>
     public bool StartVirtualization()
     {
         // Refuse to start before touching ProjFS so we leave no virtualization instance
@@ -122,6 +146,10 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Refuses to start unless the bucket has versioning Enabled, so accidental
+    /// deletes or overwrites stay recoverable.
+    /// </summary>
     private bool EnsureBucketVersioningEnabled()
     {
         BucketVersioningStatus status;
@@ -149,6 +177,10 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         return false;
     }
 
+    /// <summary>
+    /// ProjFS callback: lists the immediate children of <paramref name="relativePath"/>
+    /// and registers an enumeration session under <paramref name="enumerationId"/>.
+    /// </summary>
     public HResult StartDirectoryEnumerationCallback(
         int commandId,
         Guid enumerationId,
@@ -169,12 +201,19 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         }
     }
 
+    /// <summary>
+    /// ProjFS callback: tears down the enumeration session.
+    /// </summary>
     public HResult EndDirectoryEnumerationCallback(Guid enumerationId)
     {
         activeEnumerations.TryRemove(enumerationId, out _);
         return HResult.Ok;
     }
 
+    /// <summary>
+    /// ProjFS callback: yields filtered entries from the active enumeration session
+    /// into <paramref name="result"/> until full or the session is exhausted.
+    /// </summary>
     public HResult GetDirectoryEnumerationCallback(
         int commandId,
         Guid enumerationId,
@@ -207,6 +246,10 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         return HResult.Ok;
     }
 
+    /// <summary>
+    /// ProjFS callback: writes a placeholder for <paramref name="relativePath"/>
+    /// based on the S3 HEAD response, returning FileNotFound when the object is absent.
+    /// </summary>
     public HResult GetPlaceholderInfoCallback(
         int commandId,
         string relativePath,
@@ -244,6 +287,10 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         }
     }
 
+    /// <summary>
+    /// ProjFS callback: streams a byte range from S3 into the virtualization
+    /// instance's write buffer to hydrate the placeholder.
+    /// </summary>
     public HResult GetFileDataCallback(
         int commandId,
         string relativePath,
@@ -270,6 +317,10 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         }
     }
 
+    /// <summary>
+    /// Notification handler: uploads a locally-modified file to S3 and records the
+    /// new ETag with the change watcher.
+    /// </summary>
     public void HandleFileModified(string relativePath, bool isDirectory)
     {
         if (Options.ReadOnly || isDirectory || string.IsNullOrEmpty(relativePath)) return;
@@ -311,6 +362,10 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         }
     }
 
+    /// <summary>
+    /// Notification handler: deletes the corresponding S3 object (or whole prefix
+    /// for directories) after a local delete.
+    /// </summary>
     public void HandleFileDeleted(string relativePath, bool isDirectory)
     {
         if (Options.ReadOnly || string.IsNullOrEmpty(relativePath)) return;
@@ -343,6 +398,10 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         }
     }
 
+    /// <summary>
+    /// Notification handler: renames the corresponding S3 object or prefix and
+    /// updates the watcher's snapshot.
+    /// </summary>
     public void HandleFileRenamed(string oldRelativePath, string newRelativePath, bool isDirectory)
     {
         if (Options.ReadOnly) return;
@@ -380,6 +439,10 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         }
     }
 
+    /// <summary>
+    /// True when the path resides in the lost+found directory; activity there is
+    /// internal bookkeeping and must never be propagated back to S3.
+    /// </summary>
     private static bool IsInLostAndFound(string relativePath) =>
         relativePath.StartsWith(
             S3ChangeWatcher.LostAndFoundDirectoryName + "\\",
@@ -389,6 +452,10 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
             S3ChangeWatcher.LostAndFoundDirectoryName,
             StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Builds the change watcher and its collaborators, or returns null when the
+    /// configuration disables it (read-only mode or non-positive interval).
+    /// </summary>
     private S3ChangeWatcher? CreateChangeWatcher()
     {
         if (Options.ReadOnly)
@@ -424,6 +491,10 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
             loggerFactory.CreateLogger<S3ChangeWatcher>());
     }
 
+    /// <summary>
+    /// Creates the virtualization root if missing and marks it as a ProjFS root,
+    /// tolerating "already a vroot" return codes from earlier runs.
+    /// </summary>
     private void EnsureVirtualizationRoot()
     {
         if (!Directory.Exists(syncRootPath))
@@ -441,6 +512,9 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         }
     }
 
+    /// <summary>
+    /// Materializes the immediate-children listing for an enumeration session.
+    /// </summary>
     private async Task<List<S3ObjectInfo>> ListDirectoryAsync(string relativePath)
     {
         var list = new List<S3ObjectInfo>();

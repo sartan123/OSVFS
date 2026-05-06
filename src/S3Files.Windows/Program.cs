@@ -99,6 +99,7 @@ rootCommand.SetAction(parseResult =>
 
 return rootCommand.Parse(args).Invoke();
 
+// Constructs the provider, starts virtualization, and blocks on stdin until the user exits.
 static int RunProvider(ProjFsProviderOptions options, ILoggerFactory loggerFactory, ILogger logger)
 {
     using var provider = new ProjFsProvider(

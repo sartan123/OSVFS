@@ -6,16 +6,31 @@ using System.Runtime.CompilerServices;
 
 namespace S3Files.Windows.S3;
 
+/// <summary>
+/// AWS SDK-backed implementation of <see cref="IS3Backend"/>. Owns a single
+/// <see cref="AmazonS3Client"/> and a shared <see cref="TransferUtility"/> for the lifetime of
+/// the backend.
+/// </summary>
 internal sealed class S3Backend : IS3Backend, IDisposable
 {
+    /// <summary>
+    /// S3 caps a single DeleteObjects request at 1000 keys.
+    /// </summary>
+    private const int DeleteBatchLimit = 1000;
+
     private readonly string bucketName;
 
     private readonly string keyPrefix;
-    
+
     private readonly AmazonS3Client client;
 
     private readonly TransferUtility transferUtility;
 
+    /// <summary>
+    /// Creates a backend bound to <paramref name="bucketName"/>. <paramref name="endpointUrl"/>
+    /// switches the client into path-style addressing (LocalStack/MinIO); <paramref name="region"/>
+    /// drives request signing.
+    /// </summary>
     public S3Backend(string bucketName, string? endpointUrl = null, string? keyPrefix = null, string? region = null)
     {
         this.bucketName = bucketName;
@@ -29,12 +44,16 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         });
     }
 
+    /// <summary>
+    /// Disposes the shared TransferUtility and underlying S3 client.
+    /// </summary>
     public void Dispose()
     {
         transferUtility.Dispose();
         client.Dispose();
     }
 
+    /// <inheritdoc/>
     public async IAsyncEnumerable<S3ObjectInfo> ListAsync(
         string relativeDirectory,
         [EnumeratorCancellation] CancellationToken ct)
@@ -47,24 +66,15 @@ internal sealed class S3Backend : IS3Backend, IDisposable
             Delimiter = "/",
         };
 
-        do
+        await foreach (var response in ListPagesAsync(request, ct).ConfigureAwait(false))
         {
-            var response = await client.ListObjectsV2Async(request, ct).ConfigureAwait(false);
-
             if (response.CommonPrefixes is { } commonPrefixes)
             {
                 foreach (var common in commonPrefixes)
                 {
                     var name = common[fullPrefix.Length..].TrimEnd('/');
                     if (name.Length == 0) continue;
-                    var relKey = S3Util.StripPrefix(keyPrefix, common.TrimEnd('/'));
-                    yield return new S3ObjectInfo(
-                        Key: relKey,
-                        RelativePath: S3Util.ToRelativePath(relKey),
-                        Size: 0,
-                        LastModified: default,
-                        ETag: string.Empty,
-                        IsDirectory: true);
+                    yield return CreateDirectoryInfo(common);
                 }
             }
 
@@ -73,24 +83,14 @@ internal sealed class S3Backend : IS3Backend, IDisposable
                 foreach (var obj in s3Objects)
                 {
                     if (string.IsNullOrEmpty(obj.Key) || obj.Key.EndsWith('/')) continue;
-                    var name = obj.Key[fullPrefix.Length..];
-                    if (name.Length == 0) continue;
-                    var relKey = S3Util.StripPrefix(keyPrefix, obj.Key);
-                    yield return new S3ObjectInfo(
-                        Key: relKey,
-                        RelativePath: S3Util.ToRelativePath(relKey),
-                        Size: obj.Size ?? 0,
-                        LastModified: obj.LastModified ?? default,
-                        ETag: obj.ETag ?? string.Empty,
-                        IsDirectory: false);
+                    if (obj.Key.Length == fullPrefix.Length) continue;
+                    yield return CreateFileInfo(obj);
                 }
             }
-
-            request.ContinuationToken = response.NextContinuationToken;
         }
-        while (!string.IsNullOrEmpty(request.ContinuationToken));
     }
 
+    /// <inheritdoc/>
     public async IAsyncEnumerable<S3ObjectInfo> ListAllAsync(
         [EnumeratorCancellation] CancellationToken ct)
     {
@@ -102,66 +102,30 @@ internal sealed class S3Backend : IS3Backend, IDisposable
             Prefix = keyPrefix.Length > 0 ? keyPrefix : null,
         };
 
-        do
+        await foreach (var obj in ListFilesAsync(request, ct).ConfigureAwait(false))
         {
-            var response = await client.ListObjectsV2Async(request, ct).ConfigureAwait(false);
-            if (response.S3Objects is { } s3Objects)
-            {
-                foreach (var obj in s3Objects)
-                {
-                    if (string.IsNullOrEmpty(obj.Key) || obj.Key.EndsWith('/')) continue;
-                    var relKey = S3Util.StripPrefix(keyPrefix, obj.Key);
-                    if (relKey.Length == 0) continue;
-                    yield return new S3ObjectInfo(
-                        Key: relKey,
-                        RelativePath: S3Util.ToRelativePath(relKey),
-                        Size: obj.Size ?? 0,
-                        LastModified: obj.LastModified ?? default,
-                        ETag: obj.ETag ?? string.Empty,
-                        IsDirectory: false);
-                }
-            }
-            request.ContinuationToken = response.NextContinuationToken;
+            yield return obj;
         }
-        while (!string.IsNullOrEmpty(request.ContinuationToken));
     }
 
+    /// <inheritdoc/>
     public async IAsyncEnumerable<S3ObjectInfo> ListRecursiveAsync(
         string relativeDirectory,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        var fullPrefix = S3Util.FullPrefix(keyPrefix, relativeDirectory);
         var request = new ListObjectsV2Request
         {
             BucketName = bucketName,
-            Prefix = fullPrefix,
+            Prefix = S3Util.FullPrefix(keyPrefix, relativeDirectory),
         };
 
-        do
+        await foreach (var obj in ListFilesAsync(request, ct).ConfigureAwait(false))
         {
-            var response = await client.ListObjectsV2Async(request, ct).ConfigureAwait(false);
-
-            if (response.S3Objects is { } s3Objects)
-            {
-                foreach (var obj in s3Objects)
-                {
-                    if (string.IsNullOrEmpty(obj.Key) || obj.Key.EndsWith('/')) continue;
-                    var relKey = S3Util.StripPrefix(keyPrefix, obj.Key);
-                    if (relKey.Length == 0) continue;
-                    yield return new S3ObjectInfo(
-                        Key: relKey,
-                        RelativePath: S3Util.ToRelativePath(relKey),
-                        Size: obj.Size ?? 0,
-                        LastModified: obj.LastModified ?? default,
-                        ETag: obj.ETag ?? string.Empty,
-                        IsDirectory: false);
-                }
-            }
-            request.ContinuationToken = response.NextContinuationToken;
+            yield return obj;
         }
-        while (!string.IsNullOrEmpty(request.ContinuationToken));
     }
 
+    /// <inheritdoc/>
     public async Task<BucketVersioningStatus> GetBucketVersioningStatusAsync(CancellationToken ct)
     {
         var resp = await client.GetBucketVersioningAsync(new GetBucketVersioningRequest
@@ -177,6 +141,7 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         return status == "Enabled" ? BucketVersioningStatus.Enabled : BucketVersioningStatus.NotEnabled;
     }
 
+    /// <inheritdoc/>
     public async Task<S3ObjectInfo?> HeadAsync(string relativePath, CancellationToken ct)
     {
         var relKey = S3Util.ToS3Key(relativePath);
@@ -227,6 +192,7 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         }
     }
 
+    /// <inheritdoc/>
     public async Task ReadRangeAsync(
         string relativePath, long offset, long length, Stream destination, CancellationToken ct)
     {
@@ -241,6 +207,7 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         await resp.ResponseStream.CopyToAsync(destination, ct).ConfigureAwait(false);
     }
 
+    /// <inheritdoc/>
     public async Task<UploadResult> UploadAsync(
         string relativePath, Stream content, string? ifMatchETag, CancellationToken ct)
     {
@@ -255,16 +222,14 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         // and behave differently. Honor IfMatch on the simple path; let TransferUtility
         // handle every other case (it auto-splits at MinSizeBeforePartUpload, parallelizes
         // parts, and aborts cleanly on failure).
-        if (!string.IsNullOrEmpty(ifMatchETag))
-        {
-            return await SinglePutAsync(fullKey, content, ifMatchETag, ct).ConfigureAwait(false);
-        }
-        else
-        {
-            return await MultiPartPutAsync(fullKey, content, ct).ConfigureAwait(false);
-        }
+        return string.IsNullOrEmpty(ifMatchETag)
+            ? await MultiPartPutAsync(fullKey, content, ct).ConfigureAwait(false)
+            : await SinglePutAsync(fullKey, content, ifMatchETag, ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Single-shot PutObject path that honors the IfMatch precondition.
+    /// </summary>
     private async Task<UploadResult> SinglePutAsync(
         string fullKey, Stream content, string ifMatchETag, CancellationToken ct)
     {
@@ -277,15 +242,18 @@ internal sealed class S3Backend : IS3Backend, IDisposable
             IfMatch = ifMatchETag,
         }, ct).ConfigureAwait(false);
 
-        // PutObjectResponse carries no payload size — pass null and let the builder fall
-        // back to the stream length.
         return new(
             ETag: resp.ETag ?? string.Empty,
             VersionId: resp.VersionId ?? string.Empty,
+            // PutObjectResponse carries no payload size — fall back to the stream length.
             Size: content.CanSeek ? content.Length : 0L,
             LastModified: DateTimeOffset.UtcNow);
     }
 
+    /// <summary>
+    /// TransferUtility-driven path that auto-splits at the multipart threshold and
+    /// parallelizes parts.
+    /// </summary>
     private async Task<UploadResult> MultiPartPutAsync(
         string key, Stream content, CancellationToken ct)
     {
@@ -298,15 +266,16 @@ internal sealed class S3Backend : IS3Backend, IDisposable
             PartSize = S3Util.MultipartPartSizeBytes,
         }, ct).ConfigureAwait(false);
 
-        // resp.Size is nullable: TransferUtility leaves it null on the small-file path that
-        // delegates to PutObject. The shared builder falls back to the stream length.
         return new(
             ETag: resp.ETag ?? string.Empty,
             VersionId: resp.VersionId ?? string.Empty,
+            // resp.Size is null on the small-file path that delegates to PutObject; fall back
+            // to the stream length so the watcher's snapshot stays consistent.
             Size: resp.Size ?? (content.CanSeek ? content.Length : 0L),
             LastModified: DateTimeOffset.UtcNow);
     }
 
+    /// <inheritdoc/>
     public async Task DeleteAsync(string relativePath, CancellationToken ct)
     {
         var relKey = S3Util.ToS3Key(relativePath);
@@ -326,44 +295,22 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         }
     }
 
+    /// <inheritdoc/>
     public async Task DeletePrefixAsync(string relativeDirectory, CancellationToken ct)
     {
         var relPrefix = S3Util.NormalizePrefix(relativeDirectory);
         if (relPrefix.Length == 0) return;
-        var fullPrefix = keyPrefix + relPrefix;
 
-        var batch = new List<KeyVersion>(capacity: 1000);
         var request = new ListObjectsV2Request
         {
             BucketName = bucketName,
-            Prefix = fullPrefix,
+            Prefix = keyPrefix + relPrefix,
         };
 
-        do
-        {
-            var response = await client.ListObjectsV2Async(request, ct).ConfigureAwait(false);
-            if (response.S3Objects is { } s3Objects)
-            {
-                foreach (var obj in s3Objects)
-                {
-                    if (string.IsNullOrEmpty(obj.Key)) continue;
-                    batch.Add(new KeyVersion { Key = obj.Key });
-                    if (batch.Count == 1000)
-                    {
-                        await FlushDeleteBatchAsync(batch, ct).ConfigureAwait(false);
-                    }
-                }
-            }
-            request.ContinuationToken = response.NextContinuationToken;
-        }
-        while (!string.IsNullOrEmpty(request.ContinuationToken));
-
-        if (batch.Count > 0)
-        {
-            await FlushDeleteBatchAsync(batch, ct).ConfigureAwait(false);
-        }
+        await BatchDeleteKeysAsync(EnumerateKeysAsync(request, ct), ct).ConfigureAwait(false);
     }
 
+    /// <inheritdoc/>
     public async Task RenameAsync(string oldRelativePath, string newRelativePath, CancellationToken ct)
     {
         var oldRelKey = S3Util.ToS3Key(oldRelativePath);
@@ -374,13 +321,7 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         var oldKey = S3Util.FullKey(keyPrefix, oldRelKey);
         var newKey = S3Util.FullKey(keyPrefix, newRelKey);
 
-        await client.CopyObjectAsync(new CopyObjectRequest
-        {
-            SourceBucket = bucketName,
-            SourceKey = oldKey,
-            DestinationBucket = bucketName,
-            DestinationKey = newKey,
-        }, ct).ConfigureAwait(false);
+        await CopyObjectAsync(oldKey, newKey, ct).ConfigureAwait(false);
 
         await client.DeleteObjectAsync(new DeleteObjectRequest
         {
@@ -389,6 +330,7 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         }, ct).ConfigureAwait(false);
     }
 
+    /// <inheritdoc/>
     public async Task RenamePrefixAsync(
         string oldRelativeDirectory, string newRelativeDirectory, CancellationToken ct)
     {
@@ -406,46 +348,126 @@ internal sealed class S3Backend : IS3Backend, IDisposable
             BucketName = bucketName,
             Prefix = oldFullPrefix,
         };
+
+        await foreach (var key in EnumerateKeysAsync(request, ct).ConfigureAwait(false))
+        {
+            keys.Add(key);
+            await CopyObjectAsync(key, newFullPrefix + key[oldFullPrefix.Length..], ct).ConfigureAwait(false);
+        }
+
+        await BatchDeleteKeysAsync(keys, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Iterates ListObjectsV2 pages, threading the continuation token automatically.
+    /// The caller's <paramref name="request"/> is mutated in place and should not be reused
+    /// after enumeration.
+    /// </summary>
+    private async IAsyncEnumerable<ListObjectsV2Response> ListPagesAsync(
+        ListObjectsV2Request request,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
         do
         {
             var response = await client.ListObjectsV2Async(request, ct).ConfigureAwait(false);
-            if (response.S3Objects is { } s3Objects)
-            {
-                foreach (var obj in s3Objects)
-                {
-                    if (!string.IsNullOrEmpty(obj.Key))
-                    {
-                        keys.Add(obj.Key);
-                    }
-                }
-            }
+            yield return response;
             request.ContinuationToken = response.NextContinuationToken;
         }
         while (!string.IsNullOrEmpty(request.ContinuationToken));
+    }
 
-        foreach (var oldKey in keys)
+    /// <summary>
+    /// Yields one <see cref="S3ObjectInfo"/> per real (non-marker) object across all
+    /// pages of <paramref name="request"/>.
+    /// </summary>
+    private async IAsyncEnumerable<S3ObjectInfo> ListFilesAsync(
+        ListObjectsV2Request request,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        await foreach (var response in ListPagesAsync(request, ct).ConfigureAwait(false))
         {
-            var suffix = oldKey[oldFullPrefix.Length..];
-            var newKey = newFullPrefix + suffix;
-            await client.CopyObjectAsync(new CopyObjectRequest
+            if (response.S3Objects is not { } s3Objects) continue;
+            foreach (var obj in s3Objects)
             {
-                SourceBucket = bucketName,
-                SourceKey = oldKey,
-                DestinationBucket = bucketName,
-                DestinationKey = newKey,
-            }, ct).ConfigureAwait(false);
-        }
-
-        if (keys.Count == 0) return;
-
-        var batch = new List<KeyVersion>(capacity: Math.Min(keys.Count, 1000));
-        foreach (var key in keys)
-        {
-            batch.Add(new KeyVersion { Key = key });
-            if (batch.Count == 1000)
-            {
-                await FlushDeleteBatchAsync(batch, ct).ConfigureAwait(false);
+                if (string.IsNullOrEmpty(obj.Key) || obj.Key.EndsWith('/')) continue;
+                var relKey = S3Util.StripPrefix(keyPrefix, obj.Key);
+                if (relKey.Length == 0) continue;
+                yield return CreateFileInfo(obj);
             }
+        }
+    }
+
+    /// <summary>
+    /// Yields the raw (full) key of every object across all pages of <paramref name="request"/>.
+    /// </summary>
+    private async IAsyncEnumerable<string> EnumerateKeysAsync(
+        ListObjectsV2Request request,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        await foreach (var response in ListPagesAsync(request, ct).ConfigureAwait(false))
+        {
+            if (response.S3Objects is not { } s3Objects) continue;
+            foreach (var obj in s3Objects)
+            {
+                if (!string.IsNullOrEmpty(obj.Key)) yield return obj.Key;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Builds an <see cref="S3ObjectInfo"/> file entry from an <see cref="S3Object"/>,
+    /// stripping the linked prefix and tolerating null SDK fields.
+    /// </summary>
+    private S3ObjectInfo CreateFileInfo(S3Object obj)
+    {
+        var relKey = S3Util.StripPrefix(keyPrefix, obj.Key);
+        return new S3ObjectInfo(
+            Key: relKey,
+            RelativePath: S3Util.ToRelativePath(relKey),
+            Size: obj.Size ?? 0,
+            LastModified: obj.LastModified ?? default,
+            ETag: obj.ETag ?? string.Empty,
+            IsDirectory: false);
+    }
+
+    /// <summary>
+    /// Builds an <see cref="S3ObjectInfo"/> directory entry from a CommonPrefixes
+    /// string returned by ListObjectsV2 with a delimiter.
+    /// </summary>
+    private S3ObjectInfo CreateDirectoryInfo(string commonPrefix)
+    {
+        var relKey = S3Util.StripPrefix(keyPrefix, commonPrefix.TrimEnd('/'));
+        return new S3ObjectInfo(
+            Key: relKey,
+            RelativePath: S3Util.ToRelativePath(relKey),
+            Size: 0,
+            LastModified: default,
+            ETag: string.Empty,
+            IsDirectory: true);
+    }
+
+    /// <summary>
+    /// Issues a single CopyObject within the same bucket.
+    /// </summary>
+    private Task<CopyObjectResponse> CopyObjectAsync(
+        string sourceKey, string destinationKey, CancellationToken ct) =>
+        client.CopyObjectAsync(new CopyObjectRequest
+        {
+            SourceBucket = bucketName,
+            SourceKey = sourceKey,
+            DestinationBucket = bucketName,
+            DestinationKey = destinationKey,
+        }, ct);
+
+    /// <summary>
+    /// Streams keys into 1000-key DeleteObjects batches.
+    /// </summary>
+    private async Task BatchDeleteKeysAsync(IAsyncEnumerable<string> keys, CancellationToken ct)
+    {
+        var batch = new List<KeyVersion>(capacity: DeleteBatchLimit);
+        await foreach (var key in keys.ConfigureAwait(false))
+        {
+            await AddAndMaybeFlushAsync(batch, key, ct).ConfigureAwait(false);
         }
         if (batch.Count > 0)
         {
@@ -453,6 +475,37 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         }
     }
 
+    /// <summary>
+    /// Synchronous-source overload of <see cref="BatchDeleteKeysAsync(IAsyncEnumerable{string}, CancellationToken)"/>.
+    /// </summary>
+    private async Task BatchDeleteKeysAsync(IEnumerable<string> keys, CancellationToken ct)
+    {
+        var batch = new List<KeyVersion>(capacity: DeleteBatchLimit);
+        foreach (var key in keys)
+        {
+            await AddAndMaybeFlushAsync(batch, key, ct).ConfigureAwait(false);
+        }
+        if (batch.Count > 0)
+        {
+            await FlushDeleteBatchAsync(batch, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Appends a key to the batch and flushes when the S3 1000-key cap is reached.
+    /// </summary>
+    private async Task AddAndMaybeFlushAsync(List<KeyVersion> batch, string key, CancellationToken ct)
+    {
+        batch.Add(new KeyVersion { Key = key });
+        if (batch.Count == DeleteBatchLimit)
+        {
+            await FlushDeleteBatchAsync(batch, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Sends a single DeleteObjects request for the accumulated batch and clears it.
+    /// </summary>
     private async Task FlushDeleteBatchAsync(List<KeyVersion> batch, CancellationToken ct)
     {
         await client.DeleteObjectsAsync(new DeleteObjectsRequest
@@ -464,6 +517,10 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         batch.Clear();
     }
 
+    /// <summary>
+    /// Builds the underlying S3 client. Endpoint overrides flip on path-style
+    /// addressing and relax the v4 SDK's checksum negotiation for S3-compatible servers.
+    /// </summary>
     private static AmazonS3Client CreateClient(string? endpointUrl, string? region)
     {
         var config = new AmazonS3Config

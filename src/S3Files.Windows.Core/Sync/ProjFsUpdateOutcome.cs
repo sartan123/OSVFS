@@ -6,10 +6,14 @@ namespace S3Files.Windows.Sync;
 /// </summary>
 internal enum ProjFsUpdateOutcome
 {
-    /// <summary>The file system was updated successfully.</summary>
+    /// <summary>
+    /// The file system was updated successfully.
+    /// </summary>
     Updated,
 
-    /// <summary>No placeholder/file existed at the target path; nothing to do.</summary>
+    /// <summary>
+    /// No placeholder/file existed at the target path; nothing to do.
+    /// </summary>
     NotFound,
 
     /// <summary>
@@ -19,6 +23,8 @@ internal enum ProjFsUpdateOutcome
     /// </summary>
     DirtyConflict,
 
-    /// <summary>The operation failed for an unexpected reason.</summary>
+    /// <summary>
+    /// The operation failed for an unexpected reason.
+    /// </summary>
     Failed,
 }
