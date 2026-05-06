@@ -8,28 +8,24 @@ namespace S3Files.Windows.S3;
 
 internal sealed class S3Backend : IS3Backend, IDisposable
 {
-    /// <summary>Streams at or above this size are routed through TransferUtility's multipart
-    /// path. Picked to be well above the S3 5 MiB minimum part size so the multipart overhead
-    /// is worth paying.</summary>
-    private const long MultipartThresholdBytes = 8L * 1024 * 1024;
-
-    /// <summary>Per-part size for multipart uploads. Must be ≥ 5 MiB to satisfy the S3
-    /// minimum; the last part is allowed to be smaller.</summary>
-    private const long MultipartPartSizeBytes = 5L * 1024 * 1024;
-
     private readonly string bucketName;
+
+    private readonly string keyPrefix;
+    
     private readonly AmazonS3Client client;
+
     private readonly TransferUtility transferUtility;
 
-    public S3Backend(string bucketName, string? endpointUrl = null)
+    public S3Backend(string bucketName, string? endpointUrl = null, string? keyPrefix = null)
     {
         this.bucketName = bucketName;
+        this.keyPrefix = S3Util.NormalizeKeyPrefix(keyPrefix);
         client = CreateClient(endpointUrl);
         // Share a single TransferUtility per backend: it's documented thread-safe, holds no
         // upload-specific state, and disposes only its internally-created client (not ours).
         transferUtility = new TransferUtility(client, new TransferUtilityConfig
         {
-            MinSizeBeforePartUpload = MultipartThresholdBytes,
+            MinSizeBeforePartUpload = S3Util.MultipartThresholdBytes,
         });
     }
 
@@ -43,11 +39,11 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         string relativeDirectory,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        var prefix = S3Util.NormalizePrefix(relativeDirectory);
+        var fullPrefix = S3Util.FullPrefix(keyPrefix, relativeDirectory);
         var request = new ListObjectsV2Request
         {
             BucketName = bucketName,
-            Prefix = prefix,
+            Prefix = fullPrefix,
             Delimiter = "/",
         };
 
@@ -59,11 +55,12 @@ internal sealed class S3Backend : IS3Backend, IDisposable
             {
                 foreach (var common in commonPrefixes)
                 {
-                    var name = common[prefix.Length..].TrimEnd('/');
+                    var name = common[fullPrefix.Length..].TrimEnd('/');
                     if (name.Length == 0) continue;
+                    var relKey = S3Util.StripPrefix(keyPrefix, common.TrimEnd('/'));
                     yield return new S3ObjectInfo(
-                        Key: common,
-                        RelativePath: S3Util.ToRelativePath(common.TrimEnd('/')),
+                        Key: relKey,
+                        RelativePath: S3Util.ToRelativePath(relKey),
                         Size: 0,
                         LastModified: default,
                         ETag: string.Empty,
@@ -76,11 +73,12 @@ internal sealed class S3Backend : IS3Backend, IDisposable
                 foreach (var obj in s3Objects)
                 {
                     if (string.IsNullOrEmpty(obj.Key) || obj.Key.EndsWith('/')) continue;
-                    var name = obj.Key[prefix.Length..];
+                    var name = obj.Key[fullPrefix.Length..];
                     if (name.Length == 0) continue;
+                    var relKey = S3Util.StripPrefix(keyPrefix, obj.Key);
                     yield return new S3ObjectInfo(
-                        Key: obj.Key,
-                        RelativePath: S3Util.ToRelativePath(obj.Key),
+                        Key: relKey,
+                        RelativePath: S3Util.ToRelativePath(relKey),
                         Size: obj.Size ?? 0,
                         LastModified: obj.LastModified ?? default,
                         ETag: obj.ETag ?? string.Empty,
@@ -99,6 +97,9 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         var request = new ListObjectsV2Request
         {
             BucketName = bucketName,
+            // When a prefix is configured, only list objects under it; the rest of the bucket
+            // is intentionally invisible to the virtualization root.
+            Prefix = keyPrefix.Length > 0 ? keyPrefix : null,
         };
 
         do
@@ -109,9 +110,11 @@ internal sealed class S3Backend : IS3Backend, IDisposable
                 foreach (var obj in s3Objects)
                 {
                     if (string.IsNullOrEmpty(obj.Key) || obj.Key.EndsWith('/')) continue;
+                    var relKey = S3Util.StripPrefix(keyPrefix, obj.Key);
+                    if (relKey.Length == 0) continue;
                     yield return new S3ObjectInfo(
-                        Key: obj.Key,
-                        RelativePath: S3Util.ToRelativePath(obj.Key),
+                        Key: relKey,
+                        RelativePath: S3Util.ToRelativePath(relKey),
                         Size: obj.Size ?? 0,
                         LastModified: obj.LastModified ?? default,
                         ETag: obj.ETag ?? string.Empty,
@@ -127,11 +130,11 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         string relativeDirectory,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        var prefix = S3Util.NormalizePrefix(relativeDirectory);
+        var fullPrefix = S3Util.FullPrefix(keyPrefix, relativeDirectory);
         var request = new ListObjectsV2Request
         {
             BucketName = bucketName,
-            Prefix = prefix,
+            Prefix = fullPrefix,
         };
 
         do
@@ -143,9 +146,11 @@ internal sealed class S3Backend : IS3Backend, IDisposable
                 foreach (var obj in s3Objects)
                 {
                     if (string.IsNullOrEmpty(obj.Key) || obj.Key.EndsWith('/')) continue;
+                    var relKey = S3Util.StripPrefix(keyPrefix, obj.Key);
+                    if (relKey.Length == 0) continue;
                     yield return new S3ObjectInfo(
-                        Key: obj.Key,
-                        RelativePath: S3Util.ToRelativePath(obj.Key),
+                        Key: relKey,
+                        RelativePath: S3Util.ToRelativePath(relKey),
                         Size: obj.Size ?? 0,
                         LastModified: obj.LastModified ?? default,
                         ETag: obj.ETag ?? string.Empty,
@@ -159,23 +164,25 @@ internal sealed class S3Backend : IS3Backend, IDisposable
 
     public async Task<S3ObjectInfo?> HeadAsync(string relativePath, CancellationToken ct)
     {
-        var key = S3Util.ToS3Key(relativePath);
-        if (key.Length == 0)
+        var relKey = S3Util.ToS3Key(relativePath);
+        if (relKey.Length == 0)
         {
             return new S3ObjectInfo(string.Empty, string.Empty, 0, default, string.Empty, IsDirectory: true);
         }
+
+        var fullKey = S3Util.FullKey(keyPrefix, relKey);
 
         try
         {
             var resp = await client.GetObjectMetadataAsync(new GetObjectMetadataRequest
             {
                 BucketName = bucketName,
-                Key = key,
+                Key = fullKey,
             }, ct).ConfigureAwait(false);
 
             return new S3ObjectInfo(
-                Key: key,
-                RelativePath: S3Util.ToRelativePath(key),
+                Key: relKey,
+                RelativePath: S3Util.ToRelativePath(relKey),
                 Size: resp.ContentLength,
                 LastModified: resp.LastModified ?? default,
                 ETag: resp.ETag ?? string.Empty,
@@ -183,7 +190,7 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         }
         catch (AmazonS3Exception ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
-            var dirPrefix = key.EndsWith('/') ? key : key + '/';
+            var dirPrefix = fullKey.EndsWith('/') ? fullKey : fullKey + '/';
             var listResp = await client.ListObjectsV2Async(new ListObjectsV2Request
             {
                 BucketName = bucketName,
@@ -194,8 +201,8 @@ internal sealed class S3Backend : IS3Backend, IDisposable
             if ((listResp.S3Objects?.Count ?? 0) > 0 || (listResp.CommonPrefixes?.Count ?? 0) > 0)
             {
                 return new S3ObjectInfo(
-                    Key: key,
-                    RelativePath: S3Util.ToRelativePath(key),
+                    Key: relKey,
+                    RelativePath: S3Util.ToRelativePath(relKey),
                     Size: 0,
                     LastModified: default,
                     ETag: string.Empty,
@@ -213,7 +220,7 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         using var resp = await client.GetObjectAsync(new GetObjectRequest
         {
             BucketName = bucketName,
-            Key = S3Util.ToS3Key(relativePath),
+            Key = S3Util.FullKey(keyPrefix, S3Util.ToS3Key(relativePath)),
             ByteRange = new ByteRange(offset, offset + length - 1),
         }, ct).ConfigureAwait(false);
         await resp.ResponseStream.CopyToAsync(destination, ct).ConfigureAwait(false);
@@ -222,33 +229,34 @@ internal sealed class S3Backend : IS3Backend, IDisposable
     public async Task<UploadResult> UploadAsync(
         string relativePath, Stream content, string? ifMatchETag, CancellationToken ct)
     {
-        var key = S3Util.ToS3Key(relativePath);
-        if (string.IsNullOrEmpty(key))
+        var relKey = S3Util.ToS3Key(relativePath);
+        if (string.IsNullOrEmpty(relKey))
         {
             throw new ArgumentException("Cannot upload to empty key.", nameof(relativePath));
         }
 
+        var fullKey = S3Util.FullKey(keyPrefix, relKey);
         // IfMatch lives on PutObject; on a multipart upload preconditions move to Complete
         // and behave differently. Honor IfMatch on the simple path; let TransferUtility
         // handle every other case (it auto-splits at MinSizeBeforePartUpload, parallelizes
         // parts, and aborts cleanly on failure).
         if (!string.IsNullOrEmpty(ifMatchETag))
         {
-            return await SinglePutAsync(key, content, ifMatchETag, ct).ConfigureAwait(false);
+            return await SinglePutAsync(fullKey, content, ifMatchETag, ct).ConfigureAwait(false);
         }
         else
         {
-            return await MultiPartPutAsync(key, content, ct).ConfigureAwait(false);
+            return await MultiPartPutAsync(fullKey, content, ct).ConfigureAwait(false);
         }
     }
 
     private async Task<UploadResult> SinglePutAsync(
-        string key, Stream content, string ifMatchETag, CancellationToken ct)
+        string fullKey, Stream content, string ifMatchETag, CancellationToken ct)
     {
         var resp = await client.PutObjectAsync(new PutObjectRequest
         {
             BucketName = bucketName,
-            Key = key,
+            Key = fullKey,
             InputStream = content,
             AutoCloseStream = false,
             IfMatch = ifMatchETag,
@@ -272,7 +280,7 @@ internal sealed class S3Backend : IS3Backend, IDisposable
             Key = key,
             InputStream = content,
             AutoCloseStream = false,
-            PartSize = MultipartPartSizeBytes,
+            PartSize = S3Util.MultipartPartSizeBytes,
         }, ct).ConfigureAwait(false);
 
         // resp.Size is nullable: TransferUtility leaves it null on the small-file path that
@@ -286,15 +294,15 @@ internal sealed class S3Backend : IS3Backend, IDisposable
 
     public async Task DeleteAsync(string relativePath, CancellationToken ct)
     {
-        var key = S3Util.ToS3Key(relativePath);
-        if (string.IsNullOrEmpty(key)) return;
+        var relKey = S3Util.ToS3Key(relativePath);
+        if (string.IsNullOrEmpty(relKey)) return;
 
         try
         {
             await client.DeleteObjectAsync(new DeleteObjectRequest
             {
                 BucketName = bucketName,
-                Key = key,
+                Key = S3Util.FullKey(keyPrefix, relKey),
             }, ct).ConfigureAwait(false);
         }
         catch (AmazonS3Exception ex) when (ex.StatusCode == HttpStatusCode.NotFound)
@@ -305,14 +313,15 @@ internal sealed class S3Backend : IS3Backend, IDisposable
 
     public async Task DeletePrefixAsync(string relativeDirectory, CancellationToken ct)
     {
-        var prefix = S3Util.NormalizePrefix(relativeDirectory);
-        if (prefix.Length == 0) return;
+        var relPrefix = S3Util.NormalizePrefix(relativeDirectory);
+        if (relPrefix.Length == 0) return;
+        var fullPrefix = keyPrefix + relPrefix;
 
         var batch = new List<KeyVersion>(capacity: 1000);
         var request = new ListObjectsV2Request
         {
             BucketName = bucketName,
-            Prefix = prefix,
+            Prefix = fullPrefix,
         };
 
         do
@@ -342,10 +351,13 @@ internal sealed class S3Backend : IS3Backend, IDisposable
 
     public async Task RenameAsync(string oldRelativePath, string newRelativePath, CancellationToken ct)
     {
-        var oldKey = S3Util.ToS3Key(oldRelativePath);
-        var newKey = S3Util.ToS3Key(newRelativePath);
-        if (string.IsNullOrEmpty(oldKey) || string.IsNullOrEmpty(newKey)) return;
-        if (string.Equals(oldKey, newKey, StringComparison.Ordinal)) return;
+        var oldRelKey = S3Util.ToS3Key(oldRelativePath);
+        var newRelKey = S3Util.ToS3Key(newRelativePath);
+        if (string.IsNullOrEmpty(oldRelKey) || string.IsNullOrEmpty(newRelKey)) return;
+        if (string.Equals(oldRelKey, newRelKey, StringComparison.Ordinal)) return;
+
+        var oldKey = S3Util.FullKey(keyPrefix, oldRelKey);
+        var newKey = S3Util.FullKey(keyPrefix, newRelKey);
 
         await client.CopyObjectAsync(new CopyObjectRequest
         {
@@ -365,16 +377,19 @@ internal sealed class S3Backend : IS3Backend, IDisposable
     public async Task RenamePrefixAsync(
         string oldRelativeDirectory, string newRelativeDirectory, CancellationToken ct)
     {
-        var oldPrefix = S3Util.NormalizePrefix(oldRelativeDirectory);
-        var newPrefix = S3Util.NormalizePrefix(newRelativeDirectory);
-        if (oldPrefix.Length == 0 || newPrefix.Length == 0) return;
-        if (string.Equals(oldPrefix, newPrefix, StringComparison.Ordinal)) return;
+        var oldRelPrefix = S3Util.NormalizePrefix(oldRelativeDirectory);
+        var newRelPrefix = S3Util.NormalizePrefix(newRelativeDirectory);
+        if (oldRelPrefix.Length == 0 || newRelPrefix.Length == 0) return;
+        if (string.Equals(oldRelPrefix, newRelPrefix, StringComparison.Ordinal)) return;
+
+        var oldFullPrefix = keyPrefix + oldRelPrefix;
+        var newFullPrefix = keyPrefix + newRelPrefix;
 
         var keys = new List<string>();
         var request = new ListObjectsV2Request
         {
             BucketName = bucketName,
-            Prefix = oldPrefix,
+            Prefix = oldFullPrefix,
         };
         do
         {
@@ -395,8 +410,8 @@ internal sealed class S3Backend : IS3Backend, IDisposable
 
         foreach (var oldKey in keys)
         {
-            var suffix = oldKey[oldPrefix.Length..];
-            var newKey = newPrefix + suffix;
+            var suffix = oldKey[oldFullPrefix.Length..];
+            var newKey = newFullPrefix + suffix;
             await client.CopyObjectAsync(new CopyObjectRequest
             {
                 SourceBucket = bucketName,

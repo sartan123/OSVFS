@@ -23,6 +23,11 @@ var endpointUrlOption = new Option<string?>("--endpoint-url")
     Description = "Override command's default URL with the given URL.",
 };
 
+var prefixOption = new Option<string?>("--prefix")
+{
+    Description = "Optional key prefix within the bucket. When set, only objects under this prefix are projected into the virtualization root.",
+};
+
 var verboseOption = new Option<bool>("--verbose")
 {
     Description = "Use verbose log level.",
@@ -45,6 +50,7 @@ var rootCommand = new RootCommand("Windows port of AWS S3 Files: mount an Amazon
     bucketOption,
     rootFolderOption,
     endpointUrlOption,
+    prefixOption,
     verboseOption,
     readOnlyOption,
     syncIntervalOption,
@@ -57,6 +63,7 @@ rootCommand.SetAction(parseResult =>
         S3Bucket = parseResult.GetValue(bucketOption)!,
         VirtRoot = parseResult.GetValue(rootFolderOption)!,
         EndpointUrl = parseResult.GetValue(endpointUrlOption),
+        KeyPrefix = parseResult.GetValue(prefixOption),
         Verbose = parseResult.GetValue(verboseOption),
         ReadOnly = parseResult.GetValue(readOnlyOption),
         SyncIntervalSeconds = parseResult.GetValue(syncIntervalOption),
