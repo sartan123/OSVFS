@@ -64,8 +64,15 @@ s3files `
 | `--bucket` | 仮想ファイルシステム経由で公開する S3 バケット (必須) | — |
 | `--root-folder` | 仮想化ルートのパス (必須) | — |
 | `--endpoint-url` | S3 エンドポイント URL の上書き (LocalStack / MinIO 用) | AWS 既定 |
+| `--prefix` | バケット内のキープレフィックス。指定すると、このプレフィックス配下のオブジェクトだけが仮想化ルートに投影される | — |
 | `--sync-interval-seconds` | 外部 S3 変更を検出するポーリング間隔。`0` で無効化 | `30` |
 | `--verbose` | デバッグレベルのログを有効化 | off |
+
+バケット内の特定のサブツリーだけを投影したい場合 (例えば
+`s3://my-bucket/team-a/`) は `--prefix team-a/` を指定します。仮想化ルート
+からはこのプレフィックスが論理ルートに見えるようになり、列挙・hydrate・
+書き込み・削除・リネームすべてがプレフィックス配下のオブジェクトにスコー
+プされます。バケット内のそれ以外のオブジェクトは見えなくなります。
 
 ## アーキテクチャ
 
@@ -109,10 +116,13 @@ s3files `
   — ローカルでの書き込み / 削除 / リネームを ProjFS の通知から受け取り、S3
   バックエンドに転送します。
 - [`S3Backend`](src/S3Files.Windows.Core/S3/S3Backend.cs) — AWSSDK.S3 を ProjFS
-  プロバイダーが必要とする最小限の API (list / head / range read / put /
-  delete / copy ベースの rename) にラップします。クロスプラットフォームな Core
-  ライブラリに置かれているため、Linux 上の LocalStack に対するインテグレーション
-  テストから ProjFS バインディング無しで利用できます。
+  プロバイダーが必要とする最小限の API (list / head / range read / upload /
+  delete / copy ベースの rename) にラップします。8 MiB を超えるアップロード
+  は `TransferUtility` 経由で 5 MiB のパートに分割して並列アップロードされ
+  ます。クロスプラットフォームな Core ライブラリに置かれているため、Linux
+  上の LocalStack に対するインテグレーションテストから ProjFS バインディング
+  無しで利用できます。`--prefix` を指定した場合、バックエンドは仮想化ルート
+  からの相対パスを `<prefix>/<path>` の形でフルキーに自動展開します。
 - [`S3ChangeWatcher`](src/S3Files.Windows.Core/Sync/S3ChangeWatcher.cs) — バケッ
   トを定期的に再列挙し、メモリ内スナップショットとの差分から外部変更を検出して
   ProjFS にプッシュします。AWS S3 Files と同様、S3 バケットを source of truth
