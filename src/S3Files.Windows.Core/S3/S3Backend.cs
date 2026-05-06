@@ -6,16 +6,26 @@ using System.Runtime.CompilerServices;
 
 namespace S3Files.Windows.S3;
 
+/// <summary>
+/// AWS SDK-backed implementation of <see cref="IS3Backend"/>. Owns a single
+/// <see cref="AmazonS3Client"/> and a shared <see cref="TransferUtility"/> for the lifetime of
+/// the backend.
+/// </summary>
 internal sealed class S3Backend : IS3Backend, IDisposable
 {
     private readonly string bucketName;
 
     private readonly string keyPrefix;
-    
+
     private readonly AmazonS3Client client;
 
     private readonly TransferUtility transferUtility;
 
+    /// <summary>
+    /// Creates a backend bound to <paramref name="bucketName"/>. <paramref name="endpointUrl"/>
+    /// switches the client into path-style addressing (LocalStack/MinIO); <paramref name="region"/>
+    /// drives request signing.
+    /// </summary>
     public S3Backend(string bucketName, string? endpointUrl = null, string? keyPrefix = null, string? region = null)
     {
         this.bucketName = bucketName;
@@ -29,12 +39,16 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         });
     }
 
+    /// <summary>
+    /// Disposes the shared TransferUtility and underlying S3 client.
+    /// </summary>
     public void Dispose()
     {
         transferUtility.Dispose();
         client.Dispose();
     }
 
+    /// <inheritdoc/>
     public async IAsyncEnumerable<S3ObjectInfo> ListAsync(
         string relativeDirectory,
         [EnumeratorCancellation] CancellationToken ct)
@@ -91,6 +105,7 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         while (!string.IsNullOrEmpty(request.ContinuationToken));
     }
 
+    /// <inheritdoc/>
     public async IAsyncEnumerable<S3ObjectInfo> ListAllAsync(
         [EnumeratorCancellation] CancellationToken ct)
     {
@@ -126,6 +141,7 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         while (!string.IsNullOrEmpty(request.ContinuationToken));
     }
 
+    /// <inheritdoc/>
     public async IAsyncEnumerable<S3ObjectInfo> ListRecursiveAsync(
         string relativeDirectory,
         [EnumeratorCancellation] CancellationToken ct)
@@ -162,6 +178,7 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         while (!string.IsNullOrEmpty(request.ContinuationToken));
     }
 
+    /// <inheritdoc/>
     public async Task<BucketVersioningStatus> GetBucketVersioningStatusAsync(CancellationToken ct)
     {
         var resp = await client.GetBucketVersioningAsync(new GetBucketVersioningRequest
@@ -177,6 +194,7 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         return status == "Enabled" ? BucketVersioningStatus.Enabled : BucketVersioningStatus.NotEnabled;
     }
 
+    /// <inheritdoc/>
     public async Task<S3ObjectInfo?> HeadAsync(string relativePath, CancellationToken ct)
     {
         var relKey = S3Util.ToS3Key(relativePath);
@@ -227,6 +245,7 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         }
     }
 
+    /// <inheritdoc/>
     public async Task ReadRangeAsync(
         string relativePath, long offset, long length, Stream destination, CancellationToken ct)
     {
@@ -241,6 +260,7 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         await resp.ResponseStream.CopyToAsync(destination, ct).ConfigureAwait(false);
     }
 
+    /// <inheritdoc/>
     public async Task<UploadResult> UploadAsync(
         string relativePath, Stream content, string? ifMatchETag, CancellationToken ct)
     {
@@ -265,6 +285,9 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         }
     }
 
+    /// <summary>
+    /// Single-shot PutObject path that honors the IfMatch precondition.
+    /// </summary>
     private async Task<UploadResult> SinglePutAsync(
         string fullKey, Stream content, string ifMatchETag, CancellationToken ct)
     {
@@ -286,6 +309,10 @@ internal sealed class S3Backend : IS3Backend, IDisposable
             LastModified: DateTimeOffset.UtcNow);
     }
 
+    /// <summary>
+    /// TransferUtility-driven path that auto-splits at the multipart threshold and
+    /// parallelizes parts.
+    /// </summary>
     private async Task<UploadResult> MultiPartPutAsync(
         string key, Stream content, CancellationToken ct)
     {
@@ -307,6 +334,7 @@ internal sealed class S3Backend : IS3Backend, IDisposable
             LastModified: DateTimeOffset.UtcNow);
     }
 
+    /// <inheritdoc/>
     public async Task DeleteAsync(string relativePath, CancellationToken ct)
     {
         var relKey = S3Util.ToS3Key(relativePath);
@@ -326,6 +354,7 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         }
     }
 
+    /// <inheritdoc/>
     public async Task DeletePrefixAsync(string relativeDirectory, CancellationToken ct)
     {
         var relPrefix = S3Util.NormalizePrefix(relativeDirectory);
@@ -364,6 +393,7 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         }
     }
 
+    /// <inheritdoc/>
     public async Task RenameAsync(string oldRelativePath, string newRelativePath, CancellationToken ct)
     {
         var oldRelKey = S3Util.ToS3Key(oldRelativePath);
@@ -389,6 +419,7 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         }, ct).ConfigureAwait(false);
     }
 
+    /// <inheritdoc/>
     public async Task RenamePrefixAsync(
         string oldRelativeDirectory, string newRelativeDirectory, CancellationToken ct)
     {
@@ -453,6 +484,9 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         }
     }
 
+    /// <summary>
+    /// Sends a single DeleteObjects request for the accumulated batch and clears it.
+    /// </summary>
     private async Task FlushDeleteBatchAsync(List<KeyVersion> batch, CancellationToken ct)
     {
         await client.DeleteObjectsAsync(new DeleteObjectsRequest
@@ -464,6 +498,10 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         batch.Clear();
     }
 
+    /// <summary>
+    /// Builds the underlying S3 client. Endpoint overrides flip on path-style
+    /// addressing and relax the v4 SDK's checksum negotiation for S3-compatible servers.
+    /// </summary>
     private static AmazonS3Client CreateClient(string? endpointUrl, string? region)
     {
         var config = new AmazonS3Config

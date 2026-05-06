@@ -2,10 +2,17 @@ using Microsoft.Windows.ProjFS;
 
 namespace S3Files.Windows.ProjFs;
 
+/// <summary>
+/// Wires ProjFS notification delegates to <see cref="ProjFsProvider"/> handlers,
+/// honoring read-only mode by short-circuiting any write-side notification.
+/// </summary>
 internal sealed class NotificationCallbacks
 {
     private readonly ProjFsProvider provider;
 
+    /// <summary>
+    /// Subscribes to whichever notifications the provided mappings request.
+    /// </summary>
     public NotificationCallbacks(
         ProjFsProvider provider,
         VirtualizationInstance virtInstance,
@@ -66,8 +73,14 @@ internal sealed class NotificationCallbacks
         }
     }
 
+    /// <summary>
+    /// Mirrors the provider's read-only flag for notification gating.
+    /// </summary>
     private bool ReadOnly => provider.Options.ReadOnly;
 
+    /// <summary>
+    /// Notification: a placeholder/file was opened; we keep the existing mask.
+    /// </summary>
     public bool OnFileOpened(
         string relativePath,
         bool isDirectory,
@@ -79,6 +92,10 @@ internal sealed class NotificationCallbacks
         return true;
     }
 
+    /// <summary>
+    /// Notification: a brand-new local file was created; upload happens later on
+    /// handle close, so we just preserve the mask here.
+    /// </summary>
     public void OnNewFileCreated(
         string relativePath,
         bool isDirectory,
@@ -89,6 +106,9 @@ internal sealed class NotificationCallbacks
         notificationMask = NotificationType.UseExistingMask;
     }
 
+    /// <summary>
+    /// Notification: a file was overwritten; upload happens on handle close.
+    /// </summary>
     public void OnFileOverwritten(
         string relativePath,
         bool isDirectory,
@@ -99,24 +119,37 @@ internal sealed class NotificationCallbacks
         notificationMask = NotificationType.UseExistingMask;
     }
 
+    /// <summary>
+    /// Notification: blocks deletes when the provider is read-only.
+    /// </summary>
     public bool OnPreDelete(
         string relativePath,
         bool isDirectory,
         uint triggeringProcessId,
         string triggeringProcessImageFileName) => !ReadOnly;
 
+    /// <summary>
+    /// Notification: blocks renames when the provider is read-only.
+    /// </summary>
     public bool OnPreRename(
         string relativePath,
         string destinationPath,
         uint triggeringProcessId,
         string triggeringProcessImageFileName) => !ReadOnly;
 
+    /// <summary>
+    /// Notification: blocks hardlink creation when the provider is read-only.
+    /// </summary>
     public bool OnPreCreateHardlink(
         string relativePath,
         string destinationPath,
         uint triggeringProcessId,
         string triggeringProcessImageFileName) => !ReadOnly;
 
+    /// <summary>
+    /// Notification: forwards rename to the provider so the corresponding S3 object
+    /// or prefix is moved, unless read-only.
+    /// </summary>
     public void OnFileRenamed(
         string relativePath,
         string destinationPath,
@@ -132,6 +165,9 @@ internal sealed class NotificationCallbacks
         }
     }
 
+    /// <summary>
+    /// Notification: hardlink-created carries no state we need to propagate to S3.
+    /// </summary>
     public void OnHardlinkCreated(
         string relativePath,
         string destinationPath,
@@ -140,6 +176,9 @@ internal sealed class NotificationCallbacks
     {
     }
 
+    /// <summary>
+    /// Notification: nothing to do when a handle closed without modifying the file.
+    /// </summary>
     public void OnFileHandleClosedNoModification(
         string relativePath,
         bool isDirectory,
@@ -148,6 +187,10 @@ internal sealed class NotificationCallbacks
     {
     }
 
+    /// <summary>
+    /// Notification: routes a closed-with-changes handle to the provider's upload
+    /// or delete handler; deletion takes precedence.
+    /// </summary>
     public void OnFileHandleClosedFileModifiedOrDeleted(
         string relativePath,
         bool isDirectory,
@@ -171,6 +214,10 @@ internal sealed class NotificationCallbacks
         }
     }
 
+    /// <summary>
+    /// Notification: blocks placeholder-to-full conversion when the provider is
+    /// read-only, since the resulting full file would diverge from S3.
+    /// </summary>
     public bool OnFilePreConvertToFull(
         string relativePath,
         uint triggeringProcessId,

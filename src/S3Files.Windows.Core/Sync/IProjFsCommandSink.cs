@@ -7,9 +7,11 @@ namespace S3Files.Windows.Sync;
 /// </summary>
 internal interface IProjFsCommandSink
 {
-    /// <summary>Tries to write a placeholder for a file or directory. Returns false if the
+    /// <summary>
+    /// Tries to write a placeholder for a file or directory. Returns false if the
     /// parent path is not yet materialized in ProjFS — in that case the next directory
-    /// enumeration will pick the new entry up naturally.</summary>
+    /// enumeration will pick the new entry up naturally.
+    /// </summary>
     bool TryWritePlaceholder(
         string relativePath,
         long size,
@@ -17,17 +19,21 @@ internal interface IProjFsCommandSink
         byte[] contentId,
         bool isDirectory);
 
-    /// <summary>Tries to update an existing placeholder/file with new contents/metadata.
+    /// <summary>
+    /// Tries to update an existing placeholder/file with new contents/metadata.
     /// If the local copy has user-data dirt the call returns
-    /// <see cref="ProjFsUpdateOutcome.DirtyConflict"/> without overwriting.</summary>
+    /// <see cref="ProjFsUpdateOutcome.DirtyConflict"/> without overwriting.
+    /// </summary>
     ProjFsUpdateOutcome TryUpdateFile(
         string relativePath,
         long size,
         DateTimeOffset lastModified,
         byte[] contentId);
 
-    /// <summary>Tries to delete the placeholder/file. If <paramref name="allowDirty"/> is false,
+    /// <summary>
+    /// Tries to delete the placeholder/file. If <paramref name="allowDirty"/> is false,
     /// dirty data causes <see cref="ProjFsUpdateOutcome.DirtyConflict"/>; if true, dirty data is
-    /// overwritten (used after the local copy has been quarantined to lost+found).</summary>
+    /// overwritten (used after the local copy has been quarantined to lost+found).
+    /// </summary>
     ProjFsUpdateOutcome TryDeleteFile(string relativePath, bool allowDirty);
 }

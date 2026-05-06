@@ -15,6 +15,7 @@ internal sealed class VirtualizationCommandSink(
     ILogger<VirtualizationCommandSink> logger)
     : IProjFsCommandSink
 {
+    /// <inheritdoc/>
     public bool TryWritePlaceholder(
         string relativePath, long size, DateTimeOffset lastModified, byte[] contentId, bool isDirectory)
     {
@@ -50,6 +51,7 @@ internal sealed class VirtualizationCommandSink(
         }
     }
 
+    /// <inheritdoc/>
     public ProjFsUpdateOutcome TryUpdateFile(
         string relativePath, long size, DateTimeOffset lastModified, byte[] contentId)
     {
@@ -83,6 +85,7 @@ internal sealed class VirtualizationCommandSink(
         }
     }
 
+    /// <inheritdoc/>
     public ProjFsUpdateOutcome TryDeleteFile(string relativePath, bool allowDirty)
     {
         if (string.IsNullOrEmpty(relativePath)) return ProjFsUpdateOutcome.Failed;
@@ -109,6 +112,10 @@ internal sealed class VirtualizationCommandSink(
         }
     }
 
+    /// <summary>
+    /// Maps a ProjFS HRESULT plus failure-cause flags to the small outcome enum the
+    /// watcher reasons about.
+    /// </summary>
     private static ProjFsUpdateOutcome Translate(HResult hr, UpdateFailureCause cause)
     {
         if (hr == HResult.Ok) return ProjFsUpdateOutcome.Updated;
