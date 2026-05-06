@@ -62,8 +62,15 @@ Open `C:\Users\you\S3Files` in Explorer and the bucket contents appear.
 | `--bucket` | S3 bucket to expose through the filesystem (required) | — |
 | `--root-folder` | Path to the virtualization root (required) | — |
 | `--endpoint-url` | Override the default S3 endpoint URL (e.g. for LocalStack / MinIO) | AWS default |
+| `--prefix` | Optional key prefix within the bucket. When set, only objects under this prefix are projected into the virtualization root. | — |
 | `--sync-interval-seconds` | Polling interval for detecting external S3 changes; `0` disables | `30` |
 | `--verbose` | Enable debug-level logging | off |
+
+To project only a sub-tree of a bucket — for example `s3://my-bucket/team-a/` —
+pass `--prefix team-a/`. The virtualization root then mirrors that prefix as
+its own logical root: listings, hydration, writes, deletes, and renames all
+stay scoped to objects under the prefix, and the rest of the bucket is
+invisible.
 
 ## Architecture
 
@@ -108,9 +115,13 @@ Roughly:
   forwards them to the S3 backend.
 - [`S3Backend`](src/S3Files.Windows.Core/S3/S3Backend.cs) wraps AWSSDK.S3 with
   the small, ProjFS-shaped surface the provider needs (list, head, range
-  read, put, delete, rename-by-copy). It lives in a cross-platform Core
-  library so integration tests can run against LocalStack on Linux without
-  pulling in the Windows-only ProjFS bindings.
+  read, upload, delete, rename-by-copy). Uploads above 8 MiB are routed
+  through `TransferUtility` so large files are split into 5 MiB parts and
+  uploaded in parallel. It lives in a cross-platform Core library so
+  integration tests can run against LocalStack on Linux without pulling in
+  the Windows-only ProjFS bindings. When `--prefix` is set, the backend
+  transparently rewrites virtualization-root-relative paths into the
+  full bucket key (`<prefix>/<path>`) on every API call.
 - [`S3ChangeWatcher`](src/S3Files.Windows.Core/Sync/S3ChangeWatcher.cs)
   periodically re-lists the bucket, diffs against an in-memory snapshot, and
   pushes external changes back into ProjFS. As in AWS S3 Files, the S3 bucket
