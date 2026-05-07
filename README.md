@@ -6,31 +6,64 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
 OSVFS mounts a cloud object-store bucket as an ordinary local folder on
-Windows, with on-demand hydration and two-way synchronization, modeled on the
-[AWS S3 Files][s3files] experience and built on top of [Windows Projected
-File System (ProjFS)][projfs]. The current build ships an Amazon S3 backend;
-the object-store abstraction is provider-neutral so additional providers
-(GCS / Azure Blob) can be added behind the same `--provider` flag.
+Windows, with on-demand hydration and two-way synchronization, built on
+[Windows Projected File System (ProjFS)][projfs]. It is a **driver-free
+alternative to `rclone mount`** on Windows: ProjFS ships as an optional
+feature in Windows 10 1809+ and Windows 11, so OSVFS does not need WinFsp
+(or any other third-party kernel driver) to be installed.
 
-[s3files]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-files.html
+The current build ships an Amazon S3 backend. The object-store abstraction
+is provider-neutral by design, and **additional providers (Google Cloud
+Storage and Azure Blob Storage) are planned** behind the same `--provider`
+flag — see [Supported backends](#supported-backends) below.
+
 [projfs]: https://learn.microsoft.com/en-us/windows/win32/projfs/projected-file-system
 
 ## Overview
 
-AWS [S3 Files][s3files] lets you connect AWS compute resources (EC2, Lambda,
-EKS, ECS) to an S3 bucket as a real file system: directory entries are visible
-without a full download, file contents are loaded on demand, local writes are
-synchronized back to the bucket, and changes made directly to the bucket are
-reflected in the file system view. AWS implements this on top of EFS / NFS,
-so it is only available inside AWS-managed compute.
+OSVFS exposes a cloud object-store bucket through Windows Explorer the same
+way OneDrive Files On-Demand exposes cloud files: directory entries are
+visible without a full download, file contents are hydrated on first open,
+local writes / deletes / renames are propagated back to the bucket, and
+external changes are picked up by a background poller.
 
-`osvfs` brings the same end-user experience to a Windows desktop. Objects
-in the bucket appear as placeholders in Windows Explorer; their contents are
-downloaded the first time you open them. Local writes, deletes, and renames
-are propagated back to the object store, and external changes to the bucket
-are picked up by a background poller. ProjFS is the kernel-mode component,
-and `osvfs` itself runs as a normal user-mode process — no custom driver
-required.
+ProjFS — the Windows kernel-mode component that also powers OneDrive Files
+On-Demand and VFS for Git — is the kernel side here. `osvfs` itself runs as
+a normal user-mode process: there is no custom driver to install or sign.
+
+## Compared to `rclone mount`
+
+`rclone` is the de-facto way to mount object storage on Windows, and its
+broad backend coverage remains unmatched. OSVFS is a narrower tool: it
+focuses on the Windows experience and trades backend breadth for a
+zero-third-party-driver install path.
+
+| | OSVFS | `rclone mount` |
+| --- | --- | --- |
+| Kernel component | Windows-built-in **ProjFS** (enable an optional feature; no driver install) | **WinFsp** — separate kernel driver, MSI install required |
+| Install footprint | Single signed `osvfs.exe` (Native AOT) | `rclone.exe` + WinFsp MSI |
+| AppLocker / WDAC fit | No third-party kernel driver to allow-list | Requires WinFsp kernel driver to be allowed by policy |
+| Explorer integration | Native ProjFS placeholders — the same "online-only" model OneDrive uses | FUSE-style mount; files appear as fully-present |
+| Backends today | S3 (GCS / Azure Blob planned behind the same `--provider` flag) | 70+ backends |
+| Runtime dependency | None (Native AOT) | None (single Go binary) |
+
+If you need a backend OSVFS does not support, keep using rclone. If you
+want object storage to feel like OneDrive on Windows without installing a
+kernel driver, OSVFS is for you.
+
+## Supported backends
+
+OSVFS is built around a provider-neutral
+[`IObjectStoreBackend`](src/OSVFS.Core/ObjectStore/IObjectStoreBackend.cs)
+abstraction, and the backend is selected at startup with the `--provider`
+flag. Multi-cloud support is an explicit goal of the project, not just an
+abstraction left open for later.
+
+| Provider | `--provider` value | Status |
+| --- | --- | --- |
+| Amazon S3 (and S3-compatible: MinIO, Cloudflare R2, Wasabi, Backblaze B2, Ceph, …) | `s3` | **Available** |
+| Google Cloud Storage | `gcs` | Planned |
+| Azure Blob Storage | `azureblob` | Planned |
 
 ## How to use
 
@@ -92,13 +125,10 @@ invisible.
 
 ## Architecture
 
-`osvfs` is modeled directly on AWS [S3 Files][s3files]. AWS provides the
-"bucket as a file system" experience by exposing an EFS-backed file system
-over NFS to AWS-managed compute. This project provides the equivalent
-experience on a Windows desktop by implementing a ProjFS provider in user
-space — `PrjFlt.sys` is the kernel side, and `osvfs` is the provider that
-hydrates entries from the configured object store and propagates local
-changes back.
+`osvfs` is a user-mode ProjFS provider. `PrjFlt.sys` (the Windows ProjFS
+filter driver, shipped by Microsoft as part of the OS) is the kernel side,
+and `osvfs` is the provider that hydrates entries from the configured
+object store and propagates local changes back.
 
 ```
  ┌─────────────────────┐  StartDirectoryEnumeration / GetPlaceholderInfo
@@ -144,10 +174,10 @@ Roughly:
   full bucket key (`<prefix>/<path>`) on every API call.
 - [`ObjectStoreChangeWatcher`](src/OSVFS.Core/Sync/ObjectStoreChangeWatcher.cs)
   periodically re-lists the bucket, diffs against an in-memory snapshot, and
-  pushes external changes back into ProjFS. As in AWS S3 Files, the object
-  store is treated as the source of truth: if a remote change collides with
-  an unsynced local edit, the local copy is moved to a `.osvfs-lost+found`
-  quarantine directory.
+  pushes external changes back into ProjFS. The object store is treated as
+  the source of truth: if a remote change collides with an unsynced local
+  edit, the local copy is moved to a `.osvfs-lost+found` quarantine
+  directory.
 
 ## Building
 
@@ -222,13 +252,14 @@ integration tests run on Linux CI.
 
 ## References
 
-- [AWS S3 Files — official documentation][s3files] — the experience this
-  project is reproducing on Windows
-- [Understanding how synchronization works (S3 Files)](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-files-synchronization.html)
 - [Windows Projected File System (ProjFS) overview][projfs]
 - [Microsoft `ProjFS-Managed-API` SimpleProvider sample][simple-provider]
 - [.NET Native AOT deployment](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/)
 - [AWS SDK for .NET — S3](https://docs.aws.amazon.com/sdk-for-net/v3/developer-guide/s3-apis-intro.html)
+- [`rclone`](https://rclone.org/) — comparable cross-platform mount utility;
+  OSVFS is positioned as the no-extra-driver Windows-only alternative
+- [WinFsp](https://winfsp.dev/) — the kernel driver `rclone mount` depends
+  on, which OSVFS replaces with the Windows-built-in ProjFS feature
 
 ## License
 
