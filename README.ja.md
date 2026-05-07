@@ -6,32 +6,69 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
 OSVFS はクラウドオブジェクトストレージのバケットを Windows のローカル
-フォルダーとしてマウントするツールです。[AWS S3 Files][s3files] の体験を
-モデルに、オンデマンドの hydrate と双方向同期を [Windows Projected File
-System (ProjFS)][projfs] の上で実現します。現在のビルドには Amazon S3 の
-バックエンドが同梱されており、オブジェクトストア抽象化は provider-neutral
-なので、追加プロバイダー (GCS / Azure Blob) も同じ `--provider` フラグの
-下に組み込めます。
+フォルダーとしてマウントするツールです。オンデマンドの hydrate と双方向
+同期を [Windows Projected File System (ProjFS)][projfs] の上で実現します。
+位置づけとしては **`rclone mount` の「ドライバ不要」な Windows 代替**で
+あり、ProjFS は Windows 10 1809 以降と Windows 11 にオプション機能として
+標準搭載されているため、OSVFS の利用にあたって WinFsp などのサードパーティ
+製カーネルドライバを別途インストールする必要はありません。
 
-[s3files]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-files.html
+現在のビルドには Amazon S3 のバックエンドが同梱されています。オブジェクト
+ストア抽象化は最初から provider-neutral に設計されており、**追加プロバイダー
+(Google Cloud Storage / Azure Blob Storage) にも同じ `--provider` フラグの
+下で対応予定**です。詳細は下の[対応バックエンド](#対応バックエンド)を参照
+してください。
+
 [projfs]: https://learn.microsoft.com/en-us/windows/win32/projfs/projected-file-system
 
 ## 概要
 
-AWS の [S3 Files][s3files] は、AWS のコンピュートリソース (EC2 / Lambda /
-EKS / ECS) から S3 バケットを実ファイルシステムとして扱えるようにするサー
-ビスです。フルダウンロード無しでディレクトリを参照でき、ファイル本体は
-オンデマンドでロードされ、ローカルでの書き込みは S3 へ同期され、バケットへの
-直接変更はファイルシステム側にも反映されます。AWS は EFS / NFS の上にこれを
-実装しているため、利用できるのは AWS マネージドのコンピュート上のみです。
+OSVFS は OneDrive の Files On-Demand と同じ感覚で、クラウドオブジェクト
+ストレージを Windows エクスプローラーから扱えるようにします。フルダウン
+ロードなしでディレクトリを参照でき、ファイル本体は初回アクセス時にオン
+デマンドで hydrate され、ローカルでの書き込み・削除・リネームはオブジェクト
+ストアへ反映されます。バケット側の外部変更はバックグラウンドのポーリングで
+取り込みます。
 
-`osvfs` は同じユーザー体験を Windows デスクトップで提供します。バケット内の
-オブジェクトは Windows エクスプローラー上にプレースホルダーとして列挙され、
-初回アクセス時にオンデマンドで内容がダウンロードされます。ローカルでの書き込み
-・削除・リネームはオブジェクトストアへ反映され、外部から行われたバケットの
-変更はバックグラウンドのポーリングで検出してローカルに取り込みます。カーネル
-側は ProjFS が担い、`osvfs` 自体は通常のユーザーモードプロセスとして動作する
-ため、独自のカーネルドライバーは必要ありません。
+カーネル側は OneDrive Files On-Demand や VFS for Git でも使われている
+ProjFS が担い、`osvfs` 自体は通常のユーザーモードプロセスとして動作するため、
+独自のカーネルドライバーをインストール / 署名する必要は一切ありません。
+
+## `rclone mount` との比較
+
+`rclone` は Windows でオブジェクトストレージをマウントするためのデファクト
+スタンダードであり、対応バックエンドの広さは他の追随を許しません。OSVFS は
+それより狭いスコープのツールで、対応バックエンドの広さを犠牲にする代わりに
+**サードパーティ製カーネルドライバの導入が一切要らない Windows 体験**に
+特化しています。
+
+| | OSVFS | `rclone mount` |
+| --- | --- | --- |
+| カーネル要素 | Windows 標準搭載の **ProjFS** (オプション機能を有効化するだけ。ドライバインストールなし) | **WinFsp** — 別途カーネルドライバの MSI インストールが必要 |
+| 配布物 | 単一の署名済み `osvfs.exe` (Native AOT) | `rclone.exe` + WinFsp MSI |
+| AppLocker / WDAC との相性 | サードパーティ製カーネルドライバを許可リストに入れる必要なし | WinFsp カーネルドライバをポリシー上で許可する必要あり |
+| エクスプローラー統合 | ネイティブな ProjFS プレースホルダー (OneDrive と同じ "online-only" モデル) | FUSE ライクなマウント。ファイルは常に実体ありのように見える |
+| 対応バックエンド (現在) | S3 (GCS / Azure Blob は同じ `--provider` 抽象化の下で開発予定) | 70 種類以上 |
+| ランタイム依存 | なし (Native AOT) | なし (Go の単一バイナリ) |
+
+OSVFS が未対応のバックエンドを使いたい場合は、引き続き rclone を選んで
+ください。「Windows でオブジェクトストレージを OneDrive のように扱いたい、
+ただしカーネルドライバの追加インストールは避けたい」というニーズに対しては
+OSVFS が選択肢になります。
+
+## 対応バックエンド
+
+OSVFS は provider-neutral な
+[`IObjectStoreBackend`](src/OSVFS.Core/ObjectStore/IObjectStoreBackend.cs)
+抽象化の上に構築されており、起動時の `--provider` フラグでバックエンドを
+切り替えます。マルチクラウド対応は本プロジェクトの明示的なゴールであり、
+「後で拡張できるように抽象化だけ残してある」という位置づけではありません。
+
+| プロバイダー | `--provider` の値 | 状態 |
+| --- | --- | --- |
+| Amazon S3 (および S3 互換: MinIO / Cloudflare R2 / Wasabi / Backblaze B2 / Ceph など) | `s3` | **対応済み** |
+| Google Cloud Storage | `gcs` | 対応予定 |
+| Azure Blob Storage | `azureblob` | 対応予定 |
 
 ## 利用手順
 
@@ -95,13 +132,10 @@ osvfs `
 
 ## アーキテクチャ
 
-`osvfs` は AWS の [S3 Files][s3files] を **Windows 上で再現** することを
-目的としています。AWS は EFS をバックエンドにしてバケットを NFS でマウント
-可能なファイルシステムとして公開することでこの体験を実現していますが、本プロ
-ジェクトでは同等の体験を ProjFS プロバイダーをユーザーモードで実装することで
-構築します。カーネル側は `PrjFlt.sys` が担当し、`osvfs` は設定されたオブジェ
-クトストアからエントリを hydrate し、ローカルの変更を伝播させるプロバイダー
-として動作します。
+`osvfs` はユーザーモードで動作する ProjFS プロバイダーです。カーネル側は
+Microsoft が OS 標準で提供している ProjFS フィルタードライバー
+`PrjFlt.sys` が担当し、`osvfs` は設定されたオブジェクトストアからエントリ
+を hydrate し、ローカルの変更を伝播させるプロバイダーとして動作します。
 
 ```
  ┌─────────────────────┐  StartDirectoryEnumeration / GetPlaceholderInfo
@@ -147,9 +181,9 @@ osvfs `
   キーに自動展開します。
 - [`ObjectStoreChangeWatcher`](src/OSVFS.Core/Sync/ObjectStoreChangeWatcher.cs)
   — バケットを定期的に再列挙し、メモリ内スナップショットとの差分から外部変更
-  を検出して ProjFS にプッシュします。AWS S3 Files と同様、オブジェクトストア
-  を source of truth として扱い、未同期のローカル編集と衝突した場合はローカル
-  側のコピーを `.osvfs-lost+found` ディレクトリに退避します。
+  を検出して ProjFS にプッシュします。オブジェクトストアを source of truth
+  として扱い、未同期のローカル編集と衝突した場合はローカル側のコピーを
+  `.osvfs-lost+found` ディレクトリに退避します。
 
 ## ビルド方法
 
@@ -225,13 +259,14 @@ LocalStack ベースのインテグレーションテストが成立します。
 
 ## 参考リンク
 
-- [AWS S3 Files 公式ドキュメント][s3files] — 本プロジェクトが Windows で
-  再現しようとしている体験
-- [Understanding how synchronization works (S3 Files)](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-files-synchronization.html)
 - [Windows Projected File System (ProjFS) ドキュメント][projfs]
 - [Microsoft `ProjFS-Managed-API` SimpleProvider サンプル][simple-provider]
 - [.NET Native AOT デプロイ](https://learn.microsoft.com/ja-jp/dotnet/core/deploying/native-aot/)
 - [AWS SDK for .NET — S3](https://docs.aws.amazon.com/sdk-for-net/v3/developer-guide/s3-apis-intro.html)
+- [`rclone`](https://rclone.org/) — クロスプラットフォームな対抗ツール。
+  OSVFS は「ドライバ追加不要 / Windows 専用」の代替として位置付けています。
+- [WinFsp](https://winfsp.dev/) — `rclone mount` が依存しているカーネル
+  ドライバ。OSVFS では Windows 標準の ProjFS で置き換えています。
 
 ## ライセンス情報
 
