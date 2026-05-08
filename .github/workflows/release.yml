@@ -66,11 +66,11 @@ jobs:
             nuget-${{ runner.os }}-
 
       - name: Restore (locked)
-        run: dotnet restore src/OSVFS.Windows/OSVFS.Windows.csproj --locked-mode
+        run: dotnet restore src/OSVFS/OSVFS.csproj --locked-mode
 
       - name: Publish (Native AOT, self-contained, win-x64)
         run: >
-          dotnet publish src/OSVFS.Windows/OSVFS.Windows.csproj
+          dotnet publish src/OSVFS/OSVFS.csproj
           --configuration Release
           --runtime win-x64
           --self-contained true

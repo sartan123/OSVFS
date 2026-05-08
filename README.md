@@ -156,10 +156,10 @@ object store and propagates local changes back.
 
 Roughly:
 
-- [`ProjFsProvider`](src/OSVFS.Windows/ProjFs/ProjFsProvider.cs) implements
+- [`ProjFsProvider`](src/OSVFS/ProjFs/ProjFsProvider.cs) implements
   `IRequiredCallbacks` from the managed ProjFS wrapper. Directory enumeration,
   placeholder metadata, and on-demand hydration all flow through here.
-- [`NotificationCallbacks`](src/OSVFS.Windows/ProjFs/NotificationCallbacks.cs)
+- [`NotificationCallbacks`](src/OSVFS/ProjFs/NotificationCallbacks.cs)
   receives ProjFS notifications for local writes / deletes / renames and
   forwards them to the object-store backend.
 - [`S3Backend`](src/OSVFS.Core/ObjectStore/S3/S3Backend.cs) wraps AWSSDK.S3
@@ -195,13 +195,13 @@ Roughly:
 
 ```powershell
 dotnet build OSVFS.slnx -c Debug
-dotnet run --project src\OSVFS.Windows -- --bucket my-bucket --root-folder C:\Users\you\OSVFS
+dotnet run --project src\OSVFS -- --bucket my-bucket --root-folder C:\Users\you\OSVFS
 ```
 
 ### Release build (Native AOT, single binary)
 
 ```powershell
-dotnet publish src\OSVFS.Windows -c Release -r win-x64 -o publish\win-x64
+dotnet publish src\OSVFS -c Release -r win-x64 -o publish\win-x64
 ```
 
 The output is a self-contained `osvfs.exe`. End users do **not** need the
