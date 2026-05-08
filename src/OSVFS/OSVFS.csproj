@@ -17,6 +17,10 @@
     <!-- AOT size reduction (safe for this CLI) -->
     <EventSourceSupport>false</EventSourceSupport>
     <HttpActivityPropagationSupport>false</HttpActivityPropagationSupport>
+
+    <!-- Required by LibraryImportAttribute: the generator emits unsafe stubs for
+         the Win32 Credential Manager P/Invokes. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!--
       Leave InvariantGlobalization=false: object-store keys may be compared with culture-aware
       semantics and AWSSDK / Console output rely on CultureInfo features.
@@ -27,6 +31,7 @@
     <PackageReference Include="System.CommandLine" />
     <PackageReference Include="Microsoft.Windows.ProjFS" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
   </ItemGroup>
 
   <ItemGroup>

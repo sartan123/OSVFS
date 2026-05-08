@@ -1,3 +1,4 @@
+using Amazon.Runtime;
 using Amazon.S3;
 using Amazon.S3.Model;
 using Amazon.S3.Transfer;
@@ -42,13 +43,18 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
     /// <summary>
     /// Creates a backend bound to <paramref name="bucketName"/>. <paramref name="endpointUrl"/>
     /// switches the client into path-style addressing (LocalStack/MinIO); <paramref name="region"/>
-    /// drives request signing.
+    /// drives request signing; <paramref name="credentials"/> short-circuits the SDK chain.
     /// </summary>
-    public S3Backend(string bucketName, string? endpointUrl = null, string? keyPrefix = null, string? region = null)
+    public S3Backend(
+        string bucketName,
+        string? endpointUrl = null,
+        string? keyPrefix = null,
+        string? region = null,
+        AwsCredential? credentials = null)
     {
         this.bucketName = bucketName;
         this.keyPrefix = KeyPath.NormalizeKeyPrefix(keyPrefix);
-        client = CreateClient(endpointUrl, region);
+        client = CreateClient(endpointUrl, region, credentials);
         // Share a single TransferUtility per backend: it's documented thread-safe, holds no
         // upload-specific state, and disposes only its internally-created client (not ours).
         transferUtility = new TransferUtility(client, new TransferUtilityConfig
@@ -534,7 +540,7 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
     /// Builds the underlying S3 client. Endpoint overrides flip on path-style
     /// addressing and relax the v4 SDK's checksum negotiation for S3-compatible servers.
     /// </summary>
-    private static AmazonS3Client CreateClient(string? endpointUrl, string? region)
+    private static AmazonS3Client CreateClient(string? endpointUrl, string? region, AwsCredential? credentials)
     {
         var config = new AmazonS3Config
         {
@@ -547,8 +553,8 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
             // parts. Real S3 validates these correctly, but S3-compatible servers (LocalStack,
             // MinIO) don't always implement the composite-checksum check on Complete and reject
             // the upload with "Checksum Type mismatch". Only relax for endpoint-override mode.
-            config.RequestChecksumCalculation = Amazon.Runtime.RequestChecksumCalculation.WHEN_REQUIRED;
-            config.ResponseChecksumValidation = Amazon.Runtime.ResponseChecksumValidation.WHEN_REQUIRED;
+            config.RequestChecksumCalculation = RequestChecksumCalculation.WHEN_REQUIRED;
+            config.ResponseChecksumValidation = ResponseChecksumValidation.WHEN_REQUIRED;
         }
         if (!string.IsNullOrEmpty(region))
         {
@@ -557,6 +563,15 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
             // while letting the region drive request signing.
             config.RegionEndpoint = Amazon.RegionEndpoint.GetBySystemName(region);
         }
-        return new AmazonS3Client(config);
+        if (credentials is null)
+        {
+            return new AmazonS3Client(config);
+        }
+        // Static credentials short-circuit the SDK's default chain (env vars, profile,
+        // IMDS). Session token presence picks the temporary-credentials variant.
+        var awsCredentials = string.IsNullOrEmpty(credentials.SessionToken)
+            ? (AWSCredentials)new BasicAWSCredentials(credentials.AccessKeyId, credentials.SecretAccessKey)
+            : new SessionAWSCredentials(credentials.AccessKeyId, credentials.SecretAccessKey, credentials.SessionToken);
+        return new AmazonS3Client(awsCredentials, config);
     }
 }
