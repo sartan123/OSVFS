@@ -43,4 +43,16 @@
     <InternalsVisibleTo Include="OSVFS.UnitTests" />
   </ItemGroup>
 
+  <!--
+    Ship osvfs.toml.example next to osvfs.exe so users can rename / edit it in
+    place. Lives at the repo root for GitHub discoverability; Link keeps the
+    simple file name when copied to the output directory.
+  -->
+  <ItemGroup>
+    <None Include="..\..\osvfs.toml.example" Link="osvfs.toml.example">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

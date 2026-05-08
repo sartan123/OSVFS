@@ -161,6 +161,11 @@ verbose              = false
 sync-interval-seconds = 30
 ```
 
+編集用のサンプル [`osvfs.toml.example`](./osvfs.toml.example) をリポジトリ
+ルートに同梱しています。`dotnet publish` 時には `osvfs.exe` と同じ階層にも
+コピーされるので、`osvfs.toml` (または `%APPDATA%\OSVFS\config.toml`) に
+リネームして必要なキーをコメントアウト解除するだけで使えます。
+
 キーはケバブケース (`root-folder`) とスネークケース (`root_folder`) のどち
 らも受け付けます。CLI フラグ名と一致するケバブケースが推奨です。設定ファ
 イルを置けば、通常のマウントは次のように短く済みます。

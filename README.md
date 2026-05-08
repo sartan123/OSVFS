@@ -154,6 +154,12 @@ verbose              = false
 sync-interval-seconds = 30
 ```
 
+A ready-to-edit sample is shipped as
+[`osvfs.toml.example`](./osvfs.toml.example) at the repo root and is also
+copied next to `osvfs.exe` on `dotnet publish`, so you can rename it to
+`osvfs.toml` (or `%APPDATA%\OSVFS\config.toml`) and uncomment the keys you
+need.
+
 Both kebab-case (`root-folder`) and snake_case (`root_folder`) keys are
 accepted; kebab matches the CLI flag names and is preferred. With a config
 file in place, a typical mount becomes:
