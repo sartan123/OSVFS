@@ -18,15 +18,17 @@ internal static class ObjectStoreBackendFactory
     /// <param name="endpointUrl">Optional endpoint override (mainly for S3-compatible servers).</param>
     /// <param name="keyPrefix">Optional key prefix; only objects beneath it are projected.</param>
     /// <param name="region">Optional region / location.</param>
+    /// <param name="credentials">Optional static credentials; when null the SDK's default chain is used.</param>
     public static IObjectStoreBackend Create(
         ObjectStoreProvider provider,
         string bucket,
         string? endpointUrl = null,
         string? keyPrefix = null,
-        string? region = null) =>
+        string? region = null,
+        AwsCredential? credentials = null) =>
         provider switch
         {
-            ObjectStoreProvider.S3 => new S3.S3Backend(bucket, endpointUrl, keyPrefix, region),
+            ObjectStoreProvider.S3 => new S3.S3Backend(bucket, endpointUrl, keyPrefix, region, credentials),
             ObjectStoreProvider.Gcs => throw new NotSupportedException(
                 "Google Cloud Storage backend is not yet implemented. " +
                 "Currently only --provider s3 is supported."),

@@ -52,4 +52,10 @@ internal sealed class ProjFsProviderOptions
     /// Polling interval (seconds) for the change watcher; zero disables it.
     /// </summary>
     public int SyncIntervalSeconds { get; init; } = 30;
+
+    /// <summary>
+    /// Optional static credentials resolved from the OSVFS credential store; null falls
+    /// back to the SDK's default credential chain.
+    /// </summary>
+    public AwsCredential? Credentials { get; init; }
 }

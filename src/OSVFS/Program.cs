@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using System.CommandLine;
 using OSVFS;
+using OSVFS.Credentials;
 using OSVFS.ObjectStore;
 using OSVFS.ProjFs;
 
@@ -57,6 +58,13 @@ var syncIntervalOption = new Option<int>("--sync-interval-seconds")
     DefaultValueFactory = _ => 30,
 };
 
+var awsProfileOption = new Option<string?>("--aws-profile")
+{
+    Description = "Use credentials previously saved by 'osvfs credentials set --profile <name>' (encrypted with DPAPI in Windows Credential Manager).",
+};
+
+var credentialStore = new WindowsCredentialStore();
+
 var rootCommand = new RootCommand("OSVFS — Object Storage Virtual File System for Windows: mount a cloud object-store bucket/container as a local folder via ProjFS.")
 {
     providerOption,
@@ -68,10 +76,35 @@ var rootCommand = new RootCommand("OSVFS — Object Storage Virtual File System 
     verboseOption,
     readOnlyOption,
     syncIntervalOption,
+    awsProfileOption,
 };
+
+rootCommand.Subcommands.Add(CredentialsCommandFactory.Build(credentialStore));
 
 rootCommand.SetAction(parseResult =>
 {
+    using var loggerFactory = LoggerFactory.Create(builder => builder
+        .SetMinimumLevel(parseResult.GetValue(verboseOption) ? LogLevel.Debug : LogLevel.Information)
+        .AddSimpleConsole(o =>
+        {
+            o.SingleLine = true;
+            o.TimestampFormat = "HH:mm:ss ";
+        }));
+
+    var logger = loggerFactory.CreateLogger("OSVFS");
+
+    AwsCredential? credentials;
+    var profileName = parseResult.GetValue(awsProfileOption);
+    try
+    {
+        credentials = ResolveCredential(credentialStore, profileName, logger);
+    }
+    catch (Exception ex)
+    {
+        logger.LogCritical(ex, "Failed to load AWS profile '{Profile}'", profileName);
+        return ExitGeneralException;
+    }
+
     var options = new ProjFsProviderOptions
     {
         Provider = parseResult.GetValue(providerOption),
@@ -83,17 +116,8 @@ rootCommand.SetAction(parseResult =>
         Verbose = parseResult.GetValue(verboseOption),
         ReadOnly = parseResult.GetValue(readOnlyOption),
         SyncIntervalSeconds = parseResult.GetValue(syncIntervalOption),
+        Credentials = credentials,
     };
-
-    using var loggerFactory = LoggerFactory.Create(builder => builder
-        .SetMinimumLevel(options.Verbose ? LogLevel.Debug : LogLevel.Information)
-        .AddSimpleConsole(o =>
-        {
-            o.SingleLine = true;
-            o.TimestampFormat = "HH:mm:ss ";
-        }));
-
-    var logger = loggerFactory.CreateLogger("OSVFS");
 
     try
     {
@@ -107,6 +131,19 @@ rootCommand.SetAction(parseResult =>
 });
 
 return rootCommand.Parse(args).Invoke();
+
+// Resolves an --aws-profile name against the credential store. Returns null when no
+// profile is requested; throws when the requested profile is missing.
+static AwsCredential? ResolveCredential(IAwsCredentialStore store, string? profileName, ILogger logger)
+{
+    if (string.IsNullOrEmpty(profileName)) return null;
+    var credential = store.Load(profileName)
+        ?? throw new InvalidOperationException(
+            $"AWS profile '{profileName}' was not found in the OSVFS credential store. " +
+            "Run 'osvfs credentials set --profile <name>' to create it.");
+    logger.LogInformation("Using AWS credentials from profile '{Profile}'.", profileName);
+    return credential;
+}
 
 // Constructs the provider, starts virtualization, and blocks on stdin until the user exits.
 static int RunProvider(ProjFsProviderOptions options, ILoggerFactory loggerFactory, ILogger logger)
