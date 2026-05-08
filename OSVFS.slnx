@@ -3,7 +3,7 @@
     <File Path="README.md" />
   </Folder>
   <Project Path="src/OSVFS.Core/OSVFS.Core.csproj" />
-  <Project Path="src/OSVFS.Windows/OSVFS.Windows.csproj" />
+  <Project Path="src/OSVFS/OSVFS.csproj" />
   <Project Path="tests/OSVFS.Core.UnitTests/OSVFS.Core.UnitTests.csproj" />
   <Project Path="tests/OSVFS.Core.IntegrationTests/OSVFS.Core.IntegrationTests.csproj" />
 </Solution>
