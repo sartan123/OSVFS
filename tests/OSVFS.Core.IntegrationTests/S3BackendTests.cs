@@ -298,6 +298,184 @@ public sealed class S3BackendTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Upload_round_trips_user_metadata_via_Head()
+    {
+        // Issue #19: x-amz-meta-* round-trip. UploadAsync should reattach the same
+        // user metadata that HeadAsync surfaces back to the caller.
+        var metadata = new Dictionary<string, string>
+        {
+            ["tag"] = "hello",
+            ["author"] = "alice",
+        };
+
+        using var ms = new MemoryStream("payload"u8.ToArray());
+        await backend.UploadAsync(
+            "meta/file.txt",
+            ms,
+            ifMatchETag: null,
+            CancellationToken.None,
+            userMetadata: metadata);
+
+        var head = await backend.HeadAsync("meta\\file.txt", CancellationToken.None);
+        Assert.NotNull(head);
+        Assert.NotNull(head!.Value.UserMetadata);
+        Assert.Equal("hello", head.Value.UserMetadata!["tag"]);
+        Assert.Equal("alice", head.Value.UserMetadata["author"]);
+    }
+
+    [Fact]
+    public async Task Upload_then_re_upload_preserves_user_metadata_round_trip()
+    {
+        // Mirrors the issue's full round-trip: download → re-upload (passing the
+        // same metadata dictionary back) preserves every header.
+        var initial = new Dictionary<string, string>
+        {
+            ["tag"] = "alpha",
+            ["env"] = "prod",
+        };
+
+        using (var ms = new MemoryStream("v1"u8.ToArray()))
+        {
+            await backend.UploadAsync(
+                "meta/loop.txt", ms, ifMatchETag: null, CancellationToken.None,
+                userMetadata: initial);
+        }
+
+        var firstHead = await backend.HeadAsync("meta\\loop.txt", CancellationToken.None);
+        Assert.NotNull(firstHead);
+        var recovered = firstHead!.Value.UserMetadata;
+        Assert.NotNull(recovered);
+
+        using (var ms2 = new MemoryStream("v2"u8.ToArray()))
+        {
+            await backend.UploadAsync(
+                "meta/loop.txt", ms2, ifMatchETag: null, CancellationToken.None,
+                userMetadata: recovered);
+        }
+
+        var secondHead = await backend.HeadAsync("meta\\loop.txt", CancellationToken.None);
+        Assert.NotNull(secondHead);
+        var afterRoundTrip = secondHead!.Value.UserMetadata;
+        Assert.NotNull(afterRoundTrip);
+        Assert.Equal("alpha", afterRoundTrip!["tag"]);
+        Assert.Equal("prod", afterRoundTrip["env"]);
+    }
+
+    [Fact]
+    public async Task Upload_normalizes_user_metadata_keys_to_lowercase()
+    {
+        // S3 lowercases header names on the wire; the backend should pre-normalize
+        // so the local snapshot matches what comes back on HeadAsync.
+        var metadata = new Dictionary<string, string>
+        {
+            ["MixedCase"] = "value",
+            ["UPPER"] = "loud",
+        };
+
+        using var ms = new MemoryStream("body"u8.ToArray());
+        await backend.UploadAsync(
+            "meta/case.txt", ms, ifMatchETag: null, CancellationToken.None,
+            userMetadata: metadata);
+
+        var head = await backend.HeadAsync("meta\\case.txt", CancellationToken.None);
+        Assert.NotNull(head);
+        Assert.NotNull(head!.Value.UserMetadata);
+        Assert.True(head.Value.UserMetadata!.ContainsKey("mixedcase"));
+        Assert.True(head.Value.UserMetadata.ContainsKey("upper"));
+        Assert.Equal("value", head.Value.UserMetadata["mixedcase"]);
+    }
+
+    [Fact]
+    public async Task Upload_rejects_user_metadata_above_2KiB_limit()
+    {
+        // Construct a payload whose combined name+value byte count exceeds the
+        // AWS-documented 2 KiB cap. The backend should fail fast instead of
+        // forwarding the request to S3.
+        var oversized = new Dictionary<string, string>
+        {
+            [new string('k', 1024)] = new string('v', 1025),
+        };
+
+        using var ms = new MemoryStream("data"u8.ToArray());
+        await Assert.ThrowsAsync<UserMetadataTooLargeException>(async () =>
+        {
+            await backend.UploadAsync(
+                "meta/oversized.txt", ms, ifMatchETag: null, CancellationToken.None,
+                userMetadata: oversized);
+        });
+    }
+
+    [Fact]
+    public async Task Rename_preserves_destination_user_metadata_on_atomic_replace()
+    {
+        // Reproduces the editor "atomic-replace save" pattern:
+        //   1. existing file.txt has user metadata,
+        //   2. editor uploads new content as file.txt~ with no metadata,
+        //   3. editor renames file.txt~ over file.txt.
+        // Without metadata preservation the destination's x-amz-meta-* would be
+        // wiped because CopyObject defaults to copying the source's (empty) metadata.
+        var originalMetadata = new Dictionary<string, string>
+        {
+            ["tag"] = "keep-me",
+            ["author"] = "alice",
+        };
+        using (var ms = new MemoryStream("v1"u8.ToArray()))
+        {
+            await backend.UploadAsync(
+                "atomic/file.txt", ms, ifMatchETag: null, CancellationToken.None,
+                userMetadata: originalMetadata);
+        }
+
+        // Editor uploads the new content as a temp object with no user metadata.
+        using (var tmp = new MemoryStream("v2-new-content"u8.ToArray()))
+        {
+            await backend.UploadAsync(
+                "atomic/file.txt~", tmp, ifMatchETag: null, CancellationToken.None);
+        }
+
+        // Editor performs the atomic-replace via rename.
+        await backend.RenameAsync("atomic\\file.txt~", "atomic\\file.txt", CancellationToken.None);
+
+        var head = await backend.HeadAsync("atomic\\file.txt", CancellationToken.None);
+        Assert.NotNull(head);
+        // Content reflects the new (temp) bytes.
+        using (var rt = new MemoryStream())
+        {
+            await backend.ReadRangeAsync(
+                "atomic\\file.txt", 0, head!.Value.Size, rt, CancellationToken.None);
+            Assert.Equal("v2-new-content", System.Text.Encoding.UTF8.GetString(rt.ToArray()));
+        }
+        // Metadata reflects the destination's pre-existing headers, not the empty source.
+        Assert.NotNull(head!.Value.UserMetadata);
+        Assert.Equal("keep-me", head.Value.UserMetadata!["tag"]);
+        Assert.Equal("alice", head.Value.UserMetadata["author"]);
+    }
+
+    [Fact]
+    public async Task Rename_to_brand_new_destination_keeps_source_user_metadata()
+    {
+        // When the destination doesn't already exist, the default CopyObject directive
+        // should still carry the source's metadata over (no override applied).
+        var sourceMetadata = new Dictionary<string, string>
+        {
+            ["origin"] = "source",
+        };
+        using (var ms = new MemoryStream("body"u8.ToArray()))
+        {
+            await backend.UploadAsync(
+                "rename/from.txt", ms, ifMatchETag: null, CancellationToken.None,
+                userMetadata: sourceMetadata);
+        }
+
+        await backend.RenameAsync("rename\\from.txt", "rename\\to.txt", CancellationToken.None);
+
+        var head = await backend.HeadAsync("rename\\to.txt", CancellationToken.None);
+        Assert.NotNull(head);
+        Assert.NotNull(head!.Value.UserMetadata);
+        Assert.Equal("source", head.Value.UserMetadata!["origin"]);
+    }
+
+    [Fact]
     public async Task Upload_uses_multipart_for_streams_above_threshold()
     {
         // 12 MiB is above the 8 MiB multipart threshold and exercises the part-loop path

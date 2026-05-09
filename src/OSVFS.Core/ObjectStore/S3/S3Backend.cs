@@ -231,7 +231,8 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
                 Size: resp.ContentLength,
                 LastModified: resp.LastModified ?? default,
                 ETag: resp.ETag ?? string.Empty,
-                IsDirectory: false);
+                IsDirectory: false,
+                UserMetadata: ExtractUserMetadata(resp.Metadata));
         }
         catch (AmazonS3Exception ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
@@ -279,13 +280,23 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
 
     /// <inheritdoc/>
     public async Task<UploadResult> UploadAsync(
-        string relativePath, Stream content, string? ifMatchETag, CancellationToken ct)
+        string relativePath,
+        Stream content,
+        string? ifMatchETag,
+        CancellationToken ct,
+        IReadOnlyDictionary<string, string>? userMetadata = null)
     {
         var relKey = KeyPath.ToObjectKey(relativePath);
         if (string.IsNullOrEmpty(relKey))
         {
             throw new ArgumentException("Cannot upload to empty key.", nameof(relativePath));
         }
+
+        // Validate the user-metadata size up front so the operator gets a clear error
+        // instead of S3's opaque "metadata headers exceed maximum" 400 at the end of
+        // a (potentially multi-GiB) upload.
+        var normalizedMetadata = ObjectStore.UserMetadata.Normalize(userMetadata);
+        ObjectStore.UserMetadata.EnsureWithinSizeLimit(normalizedMetadata);
 
         var fullKey = KeyPath.FullKey(keyPrefix, relKey);
         // Wrap the upload payload so the SDK's pulls (single PUT or multipart workers) are
@@ -297,24 +308,31 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
         // handle every other case (it auto-splits at MinSizeBeforePartUpload, parallelizes
         // parts, and aborts cleanly on failure).
         return string.IsNullOrEmpty(ifMatchETag)
-            ? await MultiPartPutAsync(fullKey, paced, ct).ConfigureAwait(false)
-            : await SinglePutAsync(fullKey, paced, ifMatchETag, ct).ConfigureAwait(false);
+            ? await MultiPartPutAsync(fullKey, paced, normalizedMetadata, ct).ConfigureAwait(false)
+            : await SinglePutAsync(fullKey, paced, ifMatchETag, normalizedMetadata, ct).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Single-shot PutObject path that honors the IfMatch precondition.
     /// </summary>
     private async Task<UploadResult> SinglePutAsync(
-        string fullKey, Stream content, string ifMatchETag, CancellationToken ct)
+        string fullKey,
+        Stream content,
+        string ifMatchETag,
+        IReadOnlyDictionary<string, string> userMetadata,
+        CancellationToken ct)
     {
-        var resp = await client.PutObjectAsync(new PutObjectRequest
+        var request = new PutObjectRequest
         {
             BucketName = bucketName,
             Key = fullKey,
             InputStream = content,
             AutoCloseStream = false,
             IfMatch = ifMatchETag,
-        }, ct).ConfigureAwait(false);
+        };
+        ApplyUserMetadata(request.Metadata, userMetadata);
+
+        var resp = await client.PutObjectAsync(request, ct).ConfigureAwait(false);
 
         return new(
             ETag: resp.ETag ?? string.Empty,
@@ -329,16 +347,22 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
     /// parallelizes parts.
     /// </summary>
     private async Task<UploadResult> MultiPartPutAsync(
-        string key, Stream content, CancellationToken ct)
+        string key,
+        Stream content,
+        IReadOnlyDictionary<string, string> userMetadata,
+        CancellationToken ct)
     {
-        var resp = await transferUtility.UploadWithResponseAsync(new TransferUtilityUploadRequest
+        var request = new TransferUtilityUploadRequest
         {
             BucketName = bucketName,
             Key = key,
             InputStream = content,
             AutoCloseStream = false,
             PartSize = multipartPartSize,
-        }, ct).ConfigureAwait(false);
+        };
+        ApplyUserMetadata(request.Metadata, userMetadata);
+
+        var resp = await transferUtility.UploadWithResponseAsync(request, ct).ConfigureAwait(false);
 
         return new(
             ETag: resp.ETag ?? string.Empty,
@@ -347,6 +371,46 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
             // to the stream length so the watcher's snapshot stays consistent.
             Size: resp.Size ?? (content.CanSeek ? content.Length : 0L),
             LastModified: DateTimeOffset.UtcNow);
+    }
+
+    /// <summary>
+    /// Copies a normalized user-metadata map into an SDK
+    /// <see cref="MetadataCollection"/>. The SDK adds the <c>x-amz-meta-</c>
+    /// prefix on the wire, so the keys we hand over must be the bare names.
+    /// </summary>
+    private static void ApplyUserMetadata(
+        MetadataCollection target, IReadOnlyDictionary<string, string> userMetadata)
+    {
+        if (userMetadata.Count == 0) return;
+        foreach (var (name, value) in userMetadata)
+        {
+            target.Add(name, value);
+        }
+    }
+
+    /// <summary>
+    /// Materializes an <see cref="ObjectInfo.UserMetadata"/> map from a HEAD
+    /// response. The SDK exposes user metadata via <c>metadata["x-amz-meta-foo"]</c>,
+    /// so we strip the prefix and lowercase to match the wire form.
+    /// </summary>
+    private static Dictionary<string, string>? ExtractUserMetadata(MetadataCollection? metadata)
+    {
+        if (metadata is null || metadata.Keys.Count == 0) return null;
+
+        var dict = new Dictionary<string, string>(metadata.Keys.Count, StringComparer.Ordinal);
+        foreach (var rawKey in metadata.Keys)
+        {
+            if (string.IsNullOrEmpty(rawKey)) continue;
+            // The SDK stores user metadata with the "x-amz-meta-" prefix included; strip it
+            // so callers see the same names they handed to UploadAsync.
+            const string Prefix = "x-amz-meta-";
+            var name = rawKey.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase)
+                ? rawKey[Prefix.Length..]
+                : rawKey;
+            if (name.Length == 0) continue;
+            dict[name.ToLowerInvariant()] = metadata[rawKey] ?? string.Empty;
+        }
+        return dict.Count == 0 ? null : dict;
     }
 
     /// <inheritdoc/>
@@ -395,7 +459,14 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
         var oldKey = KeyPath.FullKey(keyPrefix, oldRelKey);
         var newKey = KeyPath.FullKey(keyPrefix, newRelKey);
 
-        await CopyObjectAsync(oldKey, newKey, ct).ConfigureAwait(false);
+        // Atomic-replace pattern (editor writes to a temp key, then renames it
+        // over an existing target) would otherwise lose the destination's
+        // x-amz-meta-* because the default CopyObject directive copies the
+        // source's (empty) metadata. Carry the destination's existing user
+        // metadata across the replace so the round-trip stays intact.
+        var preservedMetadata = await TryHeadUserMetadataAsync(newKey, ct).ConfigureAwait(false);
+
+        await CopyObjectAsync(oldKey, newKey, ct, preservedMetadata).ConfigureAwait(false);
 
         await client.DeleteObjectAsync(new DeleteObjectRequest
         {
@@ -512,17 +583,54 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
     }
 
     /// <summary>
-    /// Issues a single CopyObject within the same bucket.
+    /// Issues a single CopyObject within the same bucket. When
+    /// <paramref name="metadataOverride"/> is non-null the request switches to
+    /// REPLACE so the destination ends up with that exact metadata instead of
+    /// inheriting the source's; null leaves the SDK default (COPY from source).
     /// </summary>
     private Task<CopyObjectResponse> CopyObjectAsync(
-        string sourceKey, string destinationKey, CancellationToken ct) =>
-        client.CopyObjectAsync(new CopyObjectRequest
+        string sourceKey,
+        string destinationKey,
+        CancellationToken ct,
+        IReadOnlyDictionary<string, string>? metadataOverride = null)
+    {
+        var request = new CopyObjectRequest
         {
             SourceBucket = bucketName,
             SourceKey = sourceKey,
             DestinationBucket = bucketName,
             DestinationKey = destinationKey,
-        }, ct);
+        };
+        if (metadataOverride is { Count: > 0 })
+        {
+            request.MetadataDirective = S3MetadataDirective.REPLACE;
+            ApplyUserMetadata(request.Metadata, metadataOverride);
+        }
+        return client.CopyObjectAsync(request, ct);
+    }
+
+    /// <summary>
+    /// HEAD-only fetch of user metadata for a full bucket key. Returns null
+    /// when the object is missing or carries no <c>x-amz-meta-*</c>; any other
+    /// error is rethrown so the caller can decide whether to abort.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, string>?> TryHeadUserMetadataAsync(
+        string fullKey, CancellationToken ct)
+    {
+        try
+        {
+            var resp = await client.GetObjectMetadataAsync(new GetObjectMetadataRequest
+            {
+                BucketName = bucketName,
+                Key = fullKey,
+            }, ct).ConfigureAwait(false);
+            return ExtractUserMetadata(resp.Metadata);
+        }
+        catch (AmazonS3Exception ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
 
     /// <summary>
     /// Streams keys into 1000-key DeleteObjects batches.

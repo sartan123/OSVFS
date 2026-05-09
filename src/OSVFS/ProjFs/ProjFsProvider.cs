@@ -288,21 +288,32 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
                 return HResult.FileNotFound;
             }
 
-            var (key, _, size, lastModified, etag, isDirectory) = info.Value;
-            var attrs = isDirectory ? FileAttributes.Directory : FileAttributes.Normal;
-            var timestamp = lastModified == default ? DateTime.UtcNow : lastModified.UtcDateTime;
+            var snapshot = info.Value;
+            var attrs = snapshot.IsDirectory ? FileAttributes.Directory : FileAttributes.Normal;
+            var timestamp = snapshot.LastModified == default ? DateTime.UtcNow : snapshot.LastModified.UtcDateTime;
 
-            return virtualizationInstance.WritePlaceholderInfo(
+            var hr = virtualizationInstance.WritePlaceholderInfo(
                 relativePath: relativePath,
                 creationTime: timestamp,
                 lastAccessTime: timestamp,
                 lastWriteTime: timestamp,
                 changeTime: timestamp,
                 fileAttributes: attrs,
-                endOfFile: size,
-                isDirectory: isDirectory,
-                contentId: KeyPath.BuildContentId(etag),
+                endOfFile: snapshot.Size,
+                isDirectory: snapshot.IsDirectory,
+                contentId: KeyPath.BuildContentId(snapshot.ETag),
                 providerId: ProviderId);
+            if (hr == HResult.Ok && !snapshot.IsDirectory)
+            {
+                // Mirror provider-side user metadata into the placeholder's ADS so a
+                // later upload can round-trip the same x-amz-meta-* names back to S3.
+                AdsMetadataStore.Write(
+                    Path.Combine(syncRootPath, relativePath),
+                    AdsMetadataStore.UserMetaStreamName,
+                    snapshot.UserMetadata,
+                    logger);
+            }
+            return hr;
         }
         catch (Exception ex)
         {
@@ -360,6 +371,33 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         var objectKey = KeyPath.ToObjectKey(relativePath);
         using var _ = changeWatcher?.BeginLocalKeyChange(objectKey);
 
+        // Pull any user metadata previously mirrored from the bucket back out of the
+        // ADS so the upload reattaches the same x-amz-meta-* headers. Newly-created
+        // local files have no stream attached and upload with no user metadata.
+        var userMetadata = AdsMetadataStore.TryRead(
+            fullPath, AdsMetadataStore.UserMetaStreamName, logger);
+
+        // Atomic-replace editors (VS Code, modern Notepad, …) save by writing to a
+        // temp file and renaming it over the original — that wipes our ADS even
+        // though the bucket-side object still has its x-amz-meta-* headers. Fall
+        // back to a HEAD against the existing remote object so the upload can
+        // recover the previous metadata. Brand-new local files HEAD as 404 and
+        // upload with no metadata as before.
+        if (userMetadata is null)
+        {
+            try
+            {
+                var head = backend.HeadAsync(relativePath, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                userMetadata = head?.UserMetadata;
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(
+                    ex, "HEAD fallback for user metadata failed: {RelativePath}", relativePath);
+            }
+        }
+
         UploadResult result;
         long uploadedBytes;
         try
@@ -372,7 +410,9 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
                 bufferSize: 81920,
                 FileOptions.SequentialScan);
 
-            result = backend.UploadAsync(relativePath, stream, ifMatchETag: null, CancellationToken.None)
+            result = backend.UploadAsync(
+                relativePath, stream, ifMatchETag: null, CancellationToken.None,
+                userMetadata: userMetadata)
                 .GetAwaiter().GetResult();
             uploadedBytes = stream.Length;
         }
