@@ -67,8 +67,11 @@ OSVFS は provider-neutral な
 | プロバイダー | `provider` の値 | 状態 |
 | --- | --- | --- |
 | Amazon S3 (および S3 互換: MinIO / Cloudflare R2 / Wasabi / Backblaze B2 / Ceph など) | `s3` | **対応済み** |
+| Azure Blob Storage | `azureblob` | **対応済み** |
 | Google Cloud Storage | `gcs` | 対応予定 |
-| Azure Blob Storage | `azureblob` | 対応予定 |
+
+このドキュメントの他の節は S3 を前提に書かれています。Azure Blob で異なる
+点は [Azure Blob の設定](#azure-blob-の設定) を参照してください。
 
 ## 利用手順
 
@@ -144,6 +147,56 @@ osvfs mount --name personal      # 名前指定で 1 つだけ起動
 
 仮想化ルートのフォルダーをエクスプローラーで開くと、バケットの内容が表示
 されます。
+
+### Azure Blob の設定
+
+`provider = "azureblob"` を選ぶと Azure バックエンドに切り替わります。
+README の他のセクション (帯域幅の制限、マルチパートのチューニング、変更
+ソースの選択、doctor、lost-and-found …) はそのまま適用されます。マウント
+設定の差分は最小限です。
+
+```toml
+# ./osvfs.toml — Azure Blob、connection-string 認証
+provider          = "azureblob"
+bucket            = "my-container"             # Azure コンテナ名
+root-folder       = "C:/Users/you/OSVFS-azure"
+connection-string = "DefaultEndpointsProtocol=https;AccountName=…;AccountKey=…;EndpointSuffix=core.windows.net"
+```
+
+Azure Blob はマウントごとに以下 4 つの認証ブランチのうち**ちょうど 1 つ**
+を受け付けます。複数指定はあいまいさを避けるため起動時に拒否されます。
+
+| TOML キー | Azure SDK の経路 | 備考 |
+| --- | --- | --- |
+| `connection-string` | shared key 内蔵 | Azurite が出力する形式、Portal の "アクセスキー" ブレードからコピーできる形式 |
+| `account-name` + `sas` | `AzureSasCredential` | サービス / アカウントレベル SAS |
+| `account-name` + `managed-identity = true` | `ManagedIdentityCredential` | Azure 上で動くワークロード用 (VM / App Service / Functions / AKS) |
+| `account-name` + `default-azure-credential = true` | `DefaultAzureCredential` チェーン | env / Visual Studio サインイン / Azure CLI / Managed Identity 等を SDK 公式の順で評価 |
+
+`endpoint-url` はソブリンクラウドや Azure Stack 用で、デフォルトの
+`*.blob.core.windows.net` を `https://{account}.blob.{suffix}` で上書き
+できます。
+
+#### ストレージアカウントの安全性要件
+
+OSVFS はストレージアカウントで **Blob Soft Delete** が有効でない限り起動を
+拒否します。安全性ガードはコピペ可能な
+`az storage account blob-service-properties update` コマンドを表示します。
+**Versioning** は上書きパスの保護として併用が推奨され、ガードのメッセージ
+にも両方の有効化フラグを含めています。Versioning の状態は OSVFS が使う
+データプレーン SDK では取得できないため自動検証はしませんが、ガードの
+出力する `az` コマンドを実行すれば両方が同時に有効になります。
+
+#### サーバーサイド変更通知 (Event Grid → Storage Queue)
+
+`change-source = "events"` で Watcher を Azure Storage Queue に接続できま
+す。Storage Account に Event Grid サブスクリプションを設定し、
+`Microsoft.Storage.BlobCreated` / `Microsoft.Storage.BlobDeleted` を
+Storage Queue に送るようにします。`event-queue` には connection-string 利
+用時はキュー名を、SAS / Managed Identity / DefaultAzureCredential 利用時は
+完全なキュー URL を指定します。サブスクリプションの構築 (Storage Account
+→ トピック → サブスクリプション → Storage Queue) は Azure ポータルまたは
+`az eventgrid event-subscription create` で行います。
 
 ### コマンドラインの構成
 

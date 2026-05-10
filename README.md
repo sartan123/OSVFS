@@ -62,8 +62,11 @@ abstraction left open for later.
 | Provider | `provider` value | Status |
 | --- | --- | --- |
 | Amazon S3 (and S3-compatible: MinIO, Cloudflare R2, Wasabi, Backblaze B2, Ceph, …) | `s3` | **Available** |
+| Azure Blob Storage | `azureblob` | **Available** |
 | Google Cloud Storage | `gcs` | Planned |
-| Azure Blob Storage | `azureblob` | Planned |
+
+The remainder of this README walks through the S3 path; the deltas you need
+for Azure Blob are summarized in [Azure Blob configuration](#azure-blob-configuration).
 
 ## How to use
 
@@ -135,6 +138,58 @@ osvfs mount --name personal      # start one mount by name
 ```
 
 Open the configured root folder in Explorer and the bucket contents appear.
+
+### Azure Blob configuration
+
+Selecting `provider = "azureblob"` swaps in the Azure backend; everything
+else in the README (bandwidth limits, multipart tuning, the change-source
+selector, the doctor, lost-and-found, …) applies the same way. The
+mount-config delta is small:
+
+```toml
+# ./osvfs.toml — Azure Blob, connection-string auth
+provider          = "azureblob"
+bucket            = "my-container"             # Azure container name
+root-folder       = "C:/Users/you/OSVFS-azure"
+connection-string = "DefaultEndpointsProtocol=https;AccountName=…;AccountKey=…;EndpointSuffix=core.windows.net"
+```
+
+Azure Blob accepts exactly **one** of four credential branches per mount —
+specifying more than one is rejected at startup so the precedence stays
+unambiguous:
+
+| TOML keys | Azure SDK path | Notes |
+| --- | --- | --- |
+| `connection-string` | embedded shared key | What Azurite hands out and what the Portal "Access keys" blade copies. |
+| `account-name` + `sas` | `AzureSasCredential` | Service or account-level SAS. |
+| `account-name` + `managed-identity = true` | `ManagedIdentityCredential` | For Azure-hosted workloads (VM, App Service, Functions, AKS). |
+| `account-name` + `default-azure-credential = true` | `DefaultAzureCredential` chain | Picks env vars, Visual Studio sign-in, Azure CLI, Managed Identity, etc. in the SDK's documented order. |
+
+`endpoint-url` is honoured for sovereign clouds and Azure Stack — point it
+at `https://{account}.blob.{suffix}` to override the default
+`*.blob.core.windows.net`.
+
+#### Storage-account safety bar
+
+OSVFS refuses to start unless the Storage Account has **Blob Soft Delete**
+turned on; the safety guard surfaces a copy-pasteable `az storage account
+blob-service-properties update` line when it does not. Versioning protects
+against the *overwrite* path and is recommended alongside Soft Delete; the
+remediation message asks for both. Versioning state is not exposed by the
+data-plane SDK we ship, so it is not auto-verified — run the same `az` line
+the guard prints to enable both flags in one shot.
+
+#### Push-mode change notifications (Event Grid → Storage Queue)
+
+`change-source = "events"` wires the watcher to an Azure Storage Queue
+populated by an Event Grid subscription on the Storage Account
+(`Microsoft.Storage.BlobCreated`, `Microsoft.Storage.BlobDeleted`). Set
+`event-queue` to the queue name when a connection string is in play, or to
+the full queue URL when SAS / Managed Identity / DefaultAzureCredential
+authenticate the queue client. The exact subscription wiring (storage
+account → topic → subscription → Storage Queue) lives in the Azure portal
+or in `az eventgrid event-subscription create` — see the Microsoft docs
+linked from the change-source description above.
 
 ### Command-line surface
 

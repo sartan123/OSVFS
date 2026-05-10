@@ -22,7 +22,8 @@
 #     root would be ambiguous and are rejected at parse time.
 
 # Object-store provider backing the virtualization root.
-# Currently only "s3" is fully implemented; "gcs" / "azureblob" fail at startup.
+# Supported values: "s3" (and S3-compatible servers via endpoint-url),
+# "azureblob". "gcs" is planned and fails at startup today.
 # provider = "s3"
 
 # Bucket (S3/GCS) or container (Azure) projected into the virtualization root.
@@ -48,6 +49,35 @@
 # (encrypted with DPAPI in Windows Credential Manager). Omit to use the AWS
 # SDK's default chain.
 # aws-profile = "prod"
+
+# -----------------------------------------------------------------------------
+# Azure Blob authentication (provider = "azureblob")
+#
+# Pick exactly one branch. Specifying more than one is rejected at startup.
+# -----------------------------------------------------------------------------
+
+# Branch 1 — Azure Storage connection string. Copy from Azurite or the Azure
+# Portal "Access keys" blade. Carries account name + key + endpoints in one
+# value, so account-name is not needed.
+# connection-string = "DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;EndpointSuffix=core.windows.net"
+
+# Branch 2 — service- or account-level SAS bound to account-name.
+# account-name = "myaccount"
+# sas          = "sv=2024-01-01&..."
+
+# Branch 3 — ManagedIdentityCredential bound to account-name.
+# Use when osvfs runs on an Azure-hosted VM / App Service / Functions / AKS
+# pod whose system or user-assigned managed identity has Storage Blob /
+# Queue Data Contributor (or stricter) on the storage account.
+# account-name      = "myaccount"
+# managed-identity  = true
+
+# Branch 4 — DefaultAzureCredential chain bound to account-name.
+# Picks env vars, Visual Studio sign-in, Azure CLI, IMDS, etc. in the
+# SDK's documented order. Useful for developer machines where Visual
+# Studio / `az login` already supplies a token.
+# account-name              = "myaccount"
+# default-azure-credential  = true
 
 # When true, project the bucket into the virtualization root one-way: ProjFS
 # pre-notifications for delete / rename / hardlink / placeholder-to-full are
