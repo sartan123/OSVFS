@@ -166,6 +166,46 @@ public sealed class AzureBlobBackendTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Upload_with_multipart_threshold_exceeded_round_trips_via_block_commit()
+    {
+        // Force the SDK onto the StageBlock + CommitBlockList path by
+        // configuring a very small threshold and part size, then uploading
+        // a payload that's well above both. The blob should still come back
+        // identical to what we wrote — proving the multipart commit path
+        // is intact under operator-supplied tuning.
+        using var multipartBackend = new AzureBlobBackend(
+            container,
+            AzureCredentialSource.FromConnectionString(azurite.ConnectionString, "azurite"),
+            endpointUrl: null,
+            keyPrefix: null,
+            upLimiter: null,
+            downLimiter: null,
+            multipartThresholdBytes: 256 * 1024,    // 256 KiB threshold
+            multipartPartSizeBytes: 256 * 1024,     // 256 KiB blocks
+            maxConcurrentUploads: 2,
+            maxConcurrentDownloads: 2,
+            maxMultipartParts: 4);
+
+        var payload = new byte[1_500_000]; // ~1.5 MiB across multiple 256 KiB blocks
+        new Random(42).NextBytes(payload);
+
+        using (var ms = new MemoryStream(payload))
+        {
+            await multipartBackend.UploadAsync(
+                "big.bin", ms, ifMatchETag: null, CancellationToken.None);
+        }
+
+        var head = await multipartBackend.HeadAsync("big.bin", CancellationToken.None);
+        Assert.NotNull(head);
+        Assert.Equal(payload.Length, head!.Value.Size);
+
+        using var dest = new MemoryStream();
+        await multipartBackend.ReadRangeAsync(
+            "big.bin", offset: 0, length: payload.Length, dest, CancellationToken.None);
+        Assert.Equal(payload, dest.ToArray());
+    }
+
+    [Fact]
     public async Task Rename_moves_object_to_new_key()
     {
         await UploadAsync("src.txt", "data");

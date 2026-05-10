@@ -1,6 +1,8 @@
 using Azure;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
+using Azure.Storage;
+using OSVFS.Net;
 using System.Runtime.CompilerServices;
 
 namespace OSVFS.ObjectStore.AzureBlob;
@@ -21,10 +23,46 @@ internal sealed class AzureBlobBackend : IObjectStoreBackend
     /// </summary>
     public const int UserMetadataMaxByteCount = 8 * 1024;
 
+    /// <summary>
+    /// Default stream-size threshold above which uploads are routed through
+    /// the Block Blob commit path. Matches the S3 backend's 16 MiB so the
+    /// operator-facing tuning advice in the README applies on both sides.
+    /// </summary>
+    public const long DefaultMultipartThresholdBytes = 16L * 1024 * 1024;
+
+    /// <summary>
+    /// Default per-block size for chunked uploads. 4 MiB is the Azure SDK's
+    /// own default and a safe middle ground: large enough to amortize per-
+    /// request overhead on fat links, small enough that retries on a flaky
+    /// network only re-upload a few MB.
+    /// </summary>
+    public const long DefaultMultipartPartSizeBytes = 4L * 1024 * 1024;
+
+    /// <summary>
+    /// Default ceiling on in-flight upload API calls — mirrors S3.
+    /// </summary>
+    public const int DefaultMaxConcurrentUploads = 4;
+
+    /// <summary>
+    /// Default ceiling on in-flight range-read API calls — mirrors S3.
+    /// </summary>
+    public const int DefaultMaxConcurrentDownloads = 8;
+
+    /// <summary>
+    /// Default per-upload block parallelism. Threaded through to
+    /// <see cref="StorageTransferOptions.MaximumConcurrency"/>.
+    /// </summary>
+    public const int DefaultMaxMultipartParts = 10;
+
     private readonly string containerName;
     private readonly string keyPrefix;
     private readonly BlobServiceClient serviceClient;
     private readonly BlobContainerClient containerClient;
+    private readonly IRateLimiter? upLimiter;
+    private readonly IRateLimiter? downLimiter;
+    private readonly StorageTransferOptions transferOptions;
+    private readonly SemaphoreSlim uploadGate;
+    private readonly SemaphoreSlim downloadGate;
 
     /// <inheritdoc/>
     public int UserMetadataMaxBytes => UserMetadataMaxByteCount;
@@ -47,11 +85,40 @@ internal sealed class AzureBlobBackend : IObjectStoreBackend
         string containerName,
         AzureCredentialSource? credentials,
         string? endpointUrl = null,
-        string? keyPrefix = null)
+        string? keyPrefix = null,
+        IRateLimiter? upLimiter = null,
+        IRateLimiter? downLimiter = null,
+        long? multipartThresholdBytes = null,
+        long? multipartPartSizeBytes = null,
+        int? maxConcurrentUploads = null,
+        int? maxConcurrentDownloads = null,
+        int? maxMultipartParts = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(containerName);
         this.containerName = containerName;
         this.keyPrefix = KeyPath.NormalizeKeyPrefix(keyPrefix);
+        this.upLimiter = upLimiter;
+        this.downLimiter = downLimiter;
+
+        var threshold = multipartThresholdBytes ?? DefaultMultipartThresholdBytes;
+        var partSize = multipartPartSizeBytes ?? DefaultMultipartPartSizeBytes;
+        var multipartParts = Math.Max(1, maxMultipartParts ?? DefaultMaxMultipartParts);
+        // The Azure SDK's StorageTransferOptions maps cleanly onto OSVFS's
+        // multipart knobs: InitialTransferLength is the "single-shot" cap (the
+        // operator's multipart-threshold), MaximumTransferLength is the per-
+        // block size, and MaximumConcurrency caps the in-flight blocks for one
+        // upload (the operator's max-multipart-parts).
+        transferOptions = new StorageTransferOptions
+        {
+            InitialTransferSize = threshold,
+            MaximumTransferSize = partSize,
+            MaximumConcurrency = multipartParts,
+        };
+
+        var concurrentUploads = Math.Max(1, maxConcurrentUploads ?? DefaultMaxConcurrentUploads);
+        var concurrentDownloads = Math.Max(1, maxConcurrentDownloads ?? DefaultMaxConcurrentDownloads);
+        uploadGate = new SemaphoreSlim(concurrentUploads, concurrentUploads);
+        downloadGate = new SemaphoreSlim(concurrentDownloads, concurrentDownloads);
 
         serviceClient = BuildServiceClient(credentials, endpointUrl);
         containerClient = serviceClient.GetBlobContainerClient(containerName);
@@ -128,9 +195,13 @@ internal sealed class AzureBlobBackend : IObjectStoreBackend
     /// <inheritdoc/>
     public void Dispose()
     {
-        // BlobServiceClient / BlobContainerClient do not implement IDisposable —
-        // they are lightweight wrappers over a shared HttpPipeline. Nothing to
-        // release here today.
+        // BlobServiceClient / BlobContainerClient are lightweight wrappers
+        // over a shared HttpPipeline and do not implement IDisposable; only
+        // the semaphores and rate-limit owners we constructed need cleanup.
+        uploadGate.Dispose();
+        downloadGate.Dispose();
+        (upLimiter as IDisposable)?.Dispose();
+        (downLimiter as IDisposable)?.Dispose();
     }
 
     /// <inheritdoc/>
@@ -319,11 +390,27 @@ internal sealed class AzureBlobBackend : IObjectStoreBackend
         if (length == 0) return;
         var fullKey = KeyPath.FullKey(keyPrefix, KeyPath.ToObjectKey(relativePath));
         var blob = containerClient.GetBlobClient(fullKey);
-        var resp = await blob.DownloadStreamingAsync(
-            new BlobDownloadOptions { Range = new HttpRange(offset, length) },
-            cancellationToken: ct).ConfigureAwait(false);
-        await using var content = resp.Value.Content;
-        await content.CopyToAsync(destination, ct).ConfigureAwait(false);
+
+        // Hold the gate for the entire request lifetime — including streaming
+        // the response body — so a slow consumer cannot let more than
+        // maxConcurrentDownloads readers share the SDK's HTTP pool.
+        await downloadGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var resp = await blob.DownloadStreamingAsync(
+                new BlobDownloadOptions { Range = new HttpRange(offset, length) },
+                cancellationToken: ct).ConfigureAwait(false);
+            await using var content = resp.Value.Content;
+            // Pace the response body when a download ceiling is configured.
+            var source = downLimiter is null
+                ? content
+                : new RateLimitedStream(content, downLimiter);
+            await source.CopyToAsync(destination, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            downloadGate.Release();
+        }
     }
 
     /// <inheritdoc/>
@@ -337,7 +424,15 @@ internal sealed class AzureBlobBackend : IObjectStoreBackend
         var fullKey = KeyPath.FullKey(keyPrefix, KeyPath.ToObjectKey(relativePath));
         var blob = containerClient.GetBlobClient(fullKey);
 
-        var options = new BlobUploadOptions();
+        var options = new BlobUploadOptions
+        {
+            // Thread the operator-supplied multipart knobs straight through to
+            // the SDK's StorageTransferOptions: the SDK fan-outs to StageBlock
+            // / CommitBlockList when the stream exceeds InitialTransferSize,
+            // chunks it at MaximumTransferSize, and respects MaximumConcurrency
+            // for the parallel block uploads.
+            TransferOptions = transferOptions,
+        };
         if (normalizedMetadata.Count > 0)
         {
             // BlobUploadOptions.Metadata is IDictionary<string, string>; copy into
@@ -355,21 +450,33 @@ internal sealed class AzureBlobBackend : IObjectStoreBackend
             options.Conditions = new BlobRequestConditions { IfMatch = new ETag(ifMatchETag.Trim('"')) };
         }
 
-        // BlobClient.UploadAsync defaults to overwrite semantics when conditions
-        // are omitted. Azurite + the SDK's default chunking is sufficient for
-        // Step 2A; Block Blob commit-style chunking lands in Step 2D.
-        var resp = await blob.UploadAsync(content, options, ct).ConfigureAwait(false);
-        var info = resp.Value;
-        // BlobContentInfo doesn't carry size; the upload accepted whatever the
-        // stream produced. If the stream is seekable we report Length, otherwise
-        // 0 — the watcher's snapshot only uses Size as a heuristic and ETag is
-        // the authoritative identity.
-        var size = content.CanSeek ? content.Length : 0L;
-        return new UploadResult(
-            ETag: info.ETag.ToString(),
-            VersionId: info.VersionId ?? string.Empty,
-            Size: size,
-            LastModified: info.LastModified);
+        // Hold the upload gate around the full upload (single-shot or
+        // commit-style multipart). One UploadAsync = one permit regardless
+        // of how many blocks the SDK splits the upload into; per-upload
+        // block parallelism is capped by transferOptions.MaximumConcurrency.
+        await uploadGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            // Pace the upload payload via the rate-limited wrapper when a
+            // bandwidth ceiling is configured.
+            var paced = upLimiter is null ? content : new RateLimitedStream(content, upLimiter);
+            var resp = await blob.UploadAsync(paced, options, ct).ConfigureAwait(false);
+            var info = resp.Value;
+            // BlobContentInfo doesn't carry size; the upload accepted whatever
+            // the stream produced. If the stream is seekable we report Length,
+            // otherwise 0 — the watcher's snapshot only uses Size as a
+            // heuristic and ETag is the authoritative identity.
+            var size = content.CanSeek ? content.Length : 0L;
+            return new UploadResult(
+                ETag: info.ETag.ToString(),
+                VersionId: info.VersionId ?? string.Empty,
+                Size: size,
+                LastModified: info.LastModified);
+        }
+        finally
+        {
+            uploadGate.Release();
+        }
     }
 
     /// <inheritdoc/>
