@@ -169,6 +169,14 @@
 # Defaults to "osvfs"; override when running multiple OSVFS hosts so dashboards
 # can split them apart.
 # service-name = "osvfs"
+#
+# Local Prometheus-compatible /metrics HTTP listener. When set, the host binds
+# host:port and exposes /metrics (Prometheus text v0.0.4), /healthz (liveness),
+# and /version (assembly informational version). Independent of otlp-endpoint:
+# you can run /metrics alone, OTLP alone, or both at once. Loopback addresses
+# are recommended; binding to 0.0.0.0 / + exposes the endpoint on every
+# interface and emits a startup warning.
+# metrics-listen = "127.0.0.1:9999"
 
 # -----------------------------------------------------------------------------
 # Multi-mount example (commented out)

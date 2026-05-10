@@ -60,6 +60,22 @@ internal sealed class MountCliOptions
     };
 
     /// <summary>
+    /// One-shot Prometheus-compatible <c>/metrics</c> listener address.
+    /// When supplied, the host binds an HTTP listener to <c>host:port</c>
+    /// and exposes <c>/metrics</c>, <c>/healthz</c>, and <c>/version</c>.
+    /// Overrides the <c>[telemetry] metrics-listen</c> key in osvfs.toml
+    /// when both are present.
+    /// </summary>
+    public Option<string?> MetricsListen { get; } = new("--metrics-listen")
+    {
+        Description =
+            "Bind a local Prometheus-compatible /metrics HTTP listener to host:port " +
+            "(e.g. 127.0.0.1:9999). The same listener also serves /healthz (liveness) " +
+            "and /version (assembly informational version). Overrides 'metrics-listen' " +
+            "in [telemetry] when supplied.",
+    };
+
+    /// <summary>
     /// Registers every option on <paramref name="command"/>. Used by the root
     /// command and each mount subcommand so the flags are uniformly available.
     /// </summary>
@@ -69,6 +85,7 @@ internal sealed class MountCliOptions
         command.Options.Add(LogFormat);
         command.Options.Add(ConfigPath);
         command.Options.Add(OtlpEndpoint);
+        command.Options.Add(MetricsListen);
     }
 
     /// <summary>

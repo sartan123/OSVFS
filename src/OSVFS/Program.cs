@@ -51,11 +51,13 @@ rootCommand.SetAction(parseResult =>
         loggerFactory.CreateLogger<WindowsBalloonTipNotifier>());
 
     var telemetryConfig = OsvfsTelemetryHost.ResolveEffectiveConfig(
-        fileConfig?.Telemetry, parseResult.GetValue(cliOptions.OtlpEndpoint));
+        fileConfig?.Telemetry,
+        parseResult.GetValue(cliOptions.OtlpEndpoint),
+        parseResult.GetValue(cliOptions.MetricsListen));
     OsvfsTelemetryHost? telemetryHost;
     try
     {
-        telemetryHost = OsvfsTelemetryHost.Create(telemetryConfig);
+        telemetryHost = OsvfsTelemetryHost.Create(telemetryConfig, logger);
     }
     catch (OsvfsConfigException ex)
     {
@@ -63,11 +65,11 @@ rootCommand.SetAction(parseResult =>
         return ExitGeneralException;
     }
     using var _telemetry = telemetryHost;
-    if (telemetryHost is not null)
+    if (telemetryHost is not null && !string.IsNullOrWhiteSpace(telemetryConfig!.OtlpEndpoint))
     {
         logger.LogInformation(
             "OTLP telemetry enabled: endpoint={Endpoint}, protocol={Protocol}",
-            telemetryConfig!.OtlpEndpoint, telemetryConfig.OtlpProtocol ?? OtlpProtocolKind.Grpc);
+            telemetryConfig.OtlpEndpoint, telemetryConfig.OtlpProtocol ?? OtlpProtocolKind.Grpc);
     }
 
     if (fileConfig is null || fileConfig.Mounts.Count == 0)

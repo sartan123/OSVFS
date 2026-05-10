@@ -218,15 +218,17 @@ internal static class MountCommandFactory
         ILogger logger)
     {
         var telemetryConfig = OsvfsTelemetryHost.ResolveEffectiveConfig(
-            fileConfig?.Telemetry, parseResult.GetValue(cliOptions.OtlpEndpoint));
+            fileConfig?.Telemetry,
+            parseResult.GetValue(cliOptions.OtlpEndpoint),
+            parseResult.GetValue(cliOptions.MetricsListen));
         try
         {
-            var host = OsvfsTelemetryHost.Create(telemetryConfig);
-            if (host is not null)
+            var host = OsvfsTelemetryHost.Create(telemetryConfig, logger);
+            if (host is not null && !string.IsNullOrWhiteSpace(telemetryConfig!.OtlpEndpoint))
             {
                 logger.LogInformation(
                     "OTLP telemetry enabled: endpoint={Endpoint}, protocol={Protocol}",
-                    telemetryConfig!.OtlpEndpoint,
+                    telemetryConfig.OtlpEndpoint,
                     telemetryConfig.OtlpProtocol ?? OtlpProtocolKind.Grpc);
             }
             return host;
