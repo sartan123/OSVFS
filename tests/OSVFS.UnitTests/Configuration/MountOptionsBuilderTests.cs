@@ -1,7 +1,9 @@
 using Amazon.Runtime;
+using Azure.Identity;
 using Microsoft.Extensions.Logging.Abstractions;
 using OSVFS.Configuration;
 using OSVFS.ObjectStore;
+using OSVFS.ObjectStore.AzureBlob;
 using OSVFS.UnitTests.Credentials;
 using Xunit;
 
@@ -273,5 +275,149 @@ public class MountOptionsBuilderTests
         Assert.Equal(ChangeSourceKind.Polling, options.ChangeSource);
         Assert.Equal(SyncMode.OnDemand, options.SyncMode);
         Assert.False(options.AllowUnversioned);
+    }
+
+    // ----- Azure auth branches -----------------------------------------
+
+    [Fact]
+    public void Build_resolves_azure_connection_string_branch()
+    {
+        var mount = new OsvfsMountConfig
+        {
+            Name = "azure",
+            Bucket = "container",
+            RootFolder = @"C:\mounts\azure",
+            Provider = ObjectStoreProvider.AzureBlob,
+            ConnectionString = "DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=k==;EndpointSuffix=core.windows.net",
+        };
+
+        var options = MountOptionsBuilder.Build(mount, new FakeCredentialStore(), NullLogger.Instance);
+
+        var azure = Assert.IsType<AzureCredentialSource>(options.Credentials);
+        Assert.NotNull(azure.ConnectionString);
+        Assert.Null(azure.AccountName);
+        Assert.Null(azure.Sas);
+        Assert.Null(azure.TokenCredential);
+    }
+
+    [Fact]
+    public void Build_resolves_azure_sas_branch()
+    {
+        var mount = new OsvfsMountConfig
+        {
+            Name = "azure",
+            Bucket = "container",
+            RootFolder = @"C:\mounts\azure",
+            Provider = ObjectStoreProvider.AzureBlob,
+            AccountName = "myaccount",
+            Sas = "sv=2024-01-01&...",
+        };
+
+        var options = MountOptionsBuilder.Build(mount, new FakeCredentialStore(), NullLogger.Instance);
+
+        var azure = Assert.IsType<AzureCredentialSource>(options.Credentials);
+        Assert.Null(azure.ConnectionString);
+        Assert.Equal("myaccount", azure.AccountName);
+        Assert.Equal("sv=2024-01-01&...", azure.Sas);
+        Assert.Null(azure.TokenCredential);
+        Assert.Contains("myaccount", azure.Description, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Build_resolves_azure_managed_identity_branch()
+    {
+        var mount = new OsvfsMountConfig
+        {
+            Name = "azure",
+            Bucket = "container",
+            RootFolder = @"C:\mounts\azure",
+            Provider = ObjectStoreProvider.AzureBlob,
+            AccountName = "myaccount",
+            ManagedIdentity = true,
+        };
+
+        var options = MountOptionsBuilder.Build(mount, new FakeCredentialStore(), NullLogger.Instance);
+
+        var azure = Assert.IsType<AzureCredentialSource>(options.Credentials);
+        Assert.Equal("myaccount", azure.AccountName);
+        Assert.NotNull(azure.TokenCredential);
+        Assert.IsType<ManagedIdentityCredential>(azure.TokenCredential);
+        Assert.Contains("Managed Identity", azure.Description, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Build_resolves_azure_default_credential_branch()
+    {
+        var mount = new OsvfsMountConfig
+        {
+            Name = "azure",
+            Bucket = "container",
+            RootFolder = @"C:\mounts\azure",
+            Provider = ObjectStoreProvider.AzureBlob,
+            AccountName = "myaccount",
+            DefaultAzureCredential = true,
+        };
+
+        var options = MountOptionsBuilder.Build(mount, new FakeCredentialStore(), NullLogger.Instance);
+
+        var azure = Assert.IsType<AzureCredentialSource>(options.Credentials);
+        Assert.Equal("myaccount", azure.AccountName);
+        Assert.NotNull(azure.TokenCredential);
+        Assert.IsType<DefaultAzureCredential>(azure.TokenCredential);
+        Assert.Contains("DefaultAzureCredential", azure.Description, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Build_throws_when_azure_no_credential_branch_set()
+    {
+        var mount = new OsvfsMountConfig
+        {
+            Name = "azure",
+            Bucket = "container",
+            RootFolder = @"C:\mounts\azure",
+            Provider = ObjectStoreProvider.AzureBlob,
+        };
+
+        var ex = Assert.Throws<OsvfsConfigException>(() =>
+            MountOptionsBuilder.Build(mount, new FakeCredentialStore(), NullLogger.Instance));
+        Assert.Contains("connection-string", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("sas", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("managed-identity", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Build_throws_when_azure_multiple_credential_branches_set()
+    {
+        var mount = new OsvfsMountConfig
+        {
+            Name = "azure",
+            Bucket = "container",
+            RootFolder = @"C:\mounts\azure",
+            Provider = ObjectStoreProvider.AzureBlob,
+            ConnectionString = "DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=k==;EndpointSuffix=core.windows.net",
+            AccountName = "myaccount",
+            ManagedIdentity = true,
+        };
+
+        var ex = Assert.Throws<OsvfsConfigException>(() =>
+            MountOptionsBuilder.Build(mount, new FakeCredentialStore(), NullLogger.Instance));
+        Assert.Contains("exactly one credential branch", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Build_throws_when_azure_sas_lacks_account_name()
+    {
+        var mount = new OsvfsMountConfig
+        {
+            Name = "azure",
+            Bucket = "container",
+            RootFolder = @"C:\mounts\azure",
+            Provider = ObjectStoreProvider.AzureBlob,
+            Sas = "sv=2024-01-01&...",
+        };
+
+        var ex = Assert.Throws<OsvfsConfigException>(() =>
+            MountOptionsBuilder.Build(mount, new FakeCredentialStore(), NullLogger.Instance));
+        Assert.Contains("account-name", ex.Message, StringComparison.Ordinal);
     }
 }

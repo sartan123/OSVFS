@@ -33,17 +33,31 @@ internal sealed record MultipartCapabilities(
         MaxPartCount: 10_000);
 
     /// <summary>
+    /// Limits enforced by Azure Block Blob's <c>StageBlock</c> +
+    /// <c>CommitBlockList</c> path: blocks may be 1 byte to 4000 MiB each
+    /// (the documented per-block ceiling raised from 100 MiB in 2019), and
+    /// a Block Blob can hold up to 50 000 committed blocks. The OSVFS
+    /// validator clamps <c>multipart-part-size</c> against these so a config
+    /// rejected by the service surfaces the error at startup instead of at
+    /// commit time.
+    /// </summary>
+    public static MultipartCapabilities AzureBlob { get; } = new(
+        MinPartSizeBytes: 1L,
+        MaxPartSizeBytes: 4000L * 1024 * 1024,
+        MaxPartCount: 50_000);
+
+    /// <summary>
     /// Returns the multipart capabilities the validator should apply for
-    /// <paramref name="provider"/>. Falls back to <see cref="S3"/> for
-    /// providers whose backend has not landed yet, since the conservative S3
-    /// bounds are also a safe approximation for most S3-compatible services.
+    /// <paramref name="provider"/>. Unknown / not-yet-implemented arms fall
+    /// back to <see cref="S3"/>: the conservative S3 bounds are also a safe
+    /// approximation for most S3-compatible services.
     /// </summary>
     public static MultipartCapabilities For(ObjectStoreProvider provider) =>
         provider switch
         {
             ObjectStoreProvider.S3 => S3,
-            // Future arms — Azure Blob (Block Blob 4 GiB / 50 000 blocks) and
-            // GCS (resumable 256 KiB-aligned chunks, 5 TiB total) — land here.
+            ObjectStoreProvider.AzureBlob => AzureBlob,
+            // GCS (resumable 256 KiB-aligned chunks, 5 TiB total) lands here.
             _ => S3,
         };
 }

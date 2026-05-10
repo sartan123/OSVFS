@@ -36,9 +36,18 @@
         <WarningsAsErrors>$(WarningsAsErrors);NU1903;NU1904</WarningsAsErrors>
 
         <!--
-          AOT/Trim warnings come from third-party libs (AWSSDK, System.CommandLine, ProjFS).
-          Keep them as warnings even when TreatWarningsAsErrors=true so Release builds pass,
-          while still surfacing them. Real AOT issues are gated by `dotnet publish`.
+          AOT / Trim warnings come from third-party libs that have not (yet) opted
+          into the IsAotCompatible / IsTrimmable contract:
+            * AWSSDK.* (S3, SQS, SSO, Core)
+            * Azure.Storage.Blobs / Azure.Storage.Queues (transitive: System.ClientModel,
+              System.Memory.Data) — IL3058 surfaces because the assemblies don't carry
+              the marker; the AOT publish smoke job (#50) confirms the binary actually
+              links and runs.
+            * Azure.Identity (transitive: System.Diagnostics.DiagnosticSource)
+            * System.CommandLine
+            * Microsoft.Windows.ProjFS / Tomlyn (IL2104 trim warnings)
+          Keep them as warnings even when TreatWarningsAsErrors=true so Release builds
+          pass, while still surfacing them. Real AOT issues are gated by `dotnet publish`.
         -->
         <WarningsNotAsErrors>$(WarningsNotAsErrors);IL2026;IL2104;IL3050;IL3053;IL3056;IL3058</WarningsNotAsErrors>
 

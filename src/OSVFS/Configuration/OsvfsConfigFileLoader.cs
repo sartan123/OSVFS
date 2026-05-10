@@ -292,6 +292,11 @@ internal static class OsvfsConfigFileLoader
             SyncMode = ReadSyncMode(table, sourcePath),
             EventQueue = ReadString(table, "event-queue", "event_queue", sourcePath),
             AwsProfile = ReadString(table, "aws-profile", "aws_profile", sourcePath),
+            ConnectionString = ReadString(table, "connection-string", "connection_string", sourcePath),
+            AccountName = ReadString(table, "account-name", "account_name", sourcePath),
+            Sas = ReadString(table, "sas", sourcePath),
+            ManagedIdentity = ReadBool(table, "managed-identity", "managed_identity", sourcePath),
+            DefaultAzureCredential = ReadBool(table, "default-azure-credential", "default_azure_credential", sourcePath),
             BandwidthUp = ReadString(table, "bandwidth-up", "bandwidth_up", sourcePath),
             BandwidthDown = ReadString(table, "bandwidth-down", "bandwidth_down", sourcePath),
             MultipartThreshold = ReadString(table, "multipart-threshold", "multipart_threshold", sourcePath),
@@ -322,6 +327,11 @@ internal static class OsvfsConfigFileLoader
         || mount.SyncMode is not null
         || mount.EventQueue is not null
         || mount.AwsProfile is not null
+        || mount.ConnectionString is not null
+        || mount.AccountName is not null
+        || mount.Sas is not null
+        || mount.ManagedIdentity is not null
+        || mount.DefaultAzureCredential is not null
         || mount.BandwidthUp is not null
         || mount.BandwidthDown is not null
         || mount.MultipartThreshold is not null
@@ -358,6 +368,11 @@ internal static class OsvfsConfigFileLoader
             "sync-mode", "sync_mode",
             "event-queue", "event_queue",
             "aws-profile", "aws_profile",
+            "connection-string", "connection_string",
+            "account-name", "account_name",
+            "sas",
+            "managed-identity", "managed_identity",
+            "default-azure-credential", "default_azure_credential",
             "bandwidth-up", "bandwidth_up",
             "bandwidth-down", "bandwidth_down",
             "multipart-threshold", "multipart_threshold",

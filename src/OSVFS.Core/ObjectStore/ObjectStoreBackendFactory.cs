@@ -58,9 +58,11 @@ internal static class ObjectStoreBackendFactory
             ObjectStoreProvider.Gcs => DisposeAndThrow(upLimiter, downLimiter, new NotSupportedException(
                 "Google Cloud Storage backend is not yet implemented. " +
                 "Currently only --provider s3 is supported.")),
-            ObjectStoreProvider.AzureBlob => DisposeAndThrow(upLimiter, downLimiter, new NotSupportedException(
-                "Azure Blob Storage backend is not yet implemented. " +
-                "Currently only --provider s3 is supported.")),
+            ObjectStoreProvider.AzureBlob => CreateAzureBlobBackend(
+                bucket, endpointUrl, keyPrefix, credentials, upLimiter, downLimiter,
+                multipartThresholdBytes, multipartPartSizeBytes,
+                maxConcurrentUploads, maxConcurrentDownloads, maxMultipartParts,
+                provider),
             _ => DisposeAndThrow(upLimiter, downLimiter, new ArgumentOutOfRangeException(
                 nameof(provider), provider, "Unknown object-store provider.")),
         };
@@ -104,4 +106,36 @@ internal static class ObjectStoreBackendFactory
         down?.Dispose();
         throw ex;
     }
+
+    /// <summary>
+    /// Builds the Azure Blob arm. Threads bandwidth limiters and the multipart
+    /// knobs (<c>multipart-threshold</c> / <c>multipart-part-size</c> /
+    /// <c>max-concurrent-*</c> / <c>max-multipart-parts</c>) into the backend
+    /// so the same operator-facing config keys drive both S3 and Azure.
+    /// </summary>
+    private static AzureBlob.AzureBlobBackend CreateAzureBlobBackend(
+        string bucket,
+        string? endpointUrl,
+        string? keyPrefix,
+        IObjectStoreCredentialSource? credentials,
+        TokenBucketRateLimiter? upLimiter,
+        TokenBucketRateLimiter? downLimiter,
+        long? multipartThresholdBytes,
+        long? multipartPartSizeBytes,
+        int? maxConcurrentUploads,
+        int? maxConcurrentDownloads,
+        int? maxMultipartParts,
+        ObjectStoreProvider provider) =>
+        new(
+            bucket,
+            CastCredentials<AzureBlob.AzureCredentialSource>(credentials, provider),
+            endpointUrl,
+            keyPrefix,
+            upLimiter,
+            downLimiter,
+            multipartThresholdBytes,
+            multipartPartSizeBytes,
+            maxConcurrentUploads,
+            maxConcurrentDownloads,
+            maxMultipartParts);
 }
