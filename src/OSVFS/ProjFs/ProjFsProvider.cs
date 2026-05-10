@@ -643,16 +643,17 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
                 {
                     // Program.cs validates this earlier; defensive guard for tests / library callers.
                     throw new InvalidOperationException(
-                        "--change-source 'events' requires an SQS queue (--event-queue).");
+                        "--change-source 'events' requires an event queue / subscription (--event-queue).");
                 }
-                return SqsChangeSourceFactory.Create(
+                return ChangeNotificationFactory.Create(
+                    Options.Provider,
                     Options.EventQueue!,
                     Options.Bucket,
                     Options.KeyPrefix,
                     Options.EndpointUrl,
                     Options.Region,
                     Options.Credentials,
-                    loggerFactory.CreateLogger<SqsChangeSource>());
+                    loggerFactory);
 
             default:
                 throw new InvalidOperationException(
