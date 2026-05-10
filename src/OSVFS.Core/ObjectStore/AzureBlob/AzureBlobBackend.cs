@@ -29,12 +29,18 @@ internal sealed class AzureBlobBackend : IObjectStoreBackend
     public int UserMetadataMaxBytes => UserMetadataMaxByteCount;
 
     /// <summary>
-    /// Creates a backend bound to <paramref name="containerName"/>. The credential
-    /// source must carry a connection string today; SAS / Managed Identity /
-    /// <c>DefaultAzureCredential</c> branches land in Step 2B (#52).
-    /// <paramref name="endpointUrl"/> is currently unused — connection strings
-    /// already carry the endpoint — but kept on the surface for symmetry with
-    /// the S3 backend so the factory can stay uniform.
+    /// Creates a backend bound to <paramref name="containerName"/>. The
+    /// supported <paramref name="credentials"/> branches are:
+    /// <list type="bullet">
+    ///   <item>connection string (Azurite, Azure Portal "Access keys")</item>
+    ///   <item>service- or account-level SAS bound to an account name</item>
+    ///   <item>Managed Identity bound to an account name</item>
+    ///   <item><c>DefaultAzureCredential</c> chain bound to an account name</item>
+    /// </list>
+    /// <paramref name="endpointUrl"/> overrides the otherwise-default
+    /// <c>https://{accountName}.blob.core.windows.net</c> service endpoint —
+    /// useful for Azure Stack / sovereign clouds and for pointing a SAS-
+    /// authenticated client at Azurite.
     /// </summary>
     public AzureBlobBackend(
         string containerName,
@@ -46,18 +52,76 @@ internal sealed class AzureBlobBackend : IObjectStoreBackend
         this.containerName = containerName;
         this.keyPrefix = KeyPath.NormalizeKeyPrefix(keyPrefix);
 
-        if (credentials?.ConnectionString is { } connectionString)
-        {
-            var serviceClient = new BlobServiceClient(connectionString);
-            containerClient = serviceClient.GetBlobContainerClient(containerName);
-        }
-        else
+        var serviceClient = BuildServiceClient(credentials, endpointUrl);
+        containerClient = serviceClient.GetBlobContainerClient(containerName);
+    }
+
+    /// <summary>
+    /// Selects the matching <see cref="BlobServiceClient"/> constructor for
+    /// the configured credential branch. Each branch fails fast when its
+    /// required keys are missing so the operator gets a clear startup error
+    /// rather than an opaque SDK exception on the first request.
+    /// </summary>
+    private static BlobServiceClient BuildServiceClient(
+        AzureCredentialSource? credentials, string? endpointUrl)
+    {
+        if (credentials is null)
         {
             throw new InvalidOperationException(
-                "Azure Blob backend requires a connection string credential source. " +
-                "Set 'connection-string' in osvfs.toml or wait for Step 2B (#52) for SAS / Managed Identity / DefaultAzureCredential.");
+                "Azure Blob backend requires a credential source. Set one of " +
+                "'connection-string', 'sas', 'managed-identity', or 'default-azure-credential' " +
+                "in osvfs.toml.");
         }
-        _ = endpointUrl; // reserved for future use; currently the connection string is authoritative.
+
+        // Branch 1 — Connection string. The connection string carries the
+        // endpoint, so endpointUrl is intentionally ignored here.
+        if (credentials.ConnectionString is { } connectionString)
+        {
+            return new BlobServiceClient(connectionString);
+        }
+
+        // Branches 2-4 all need an account name to build the service URL.
+        if (string.IsNullOrEmpty(credentials.AccountName))
+        {
+            throw new InvalidOperationException(
+                $"Azure Blob credential source '{credentials.Description}' is missing the account name. " +
+                "This is a wiring bug — credential factory methods should set AccountName for non-connection-string branches.");
+        }
+
+        var serviceUri = ResolveServiceUri(credentials.AccountName, endpointUrl);
+
+        // Branch 2 — SAS.
+        if (credentials.Sas is { } sas)
+        {
+            return new BlobServiceClient(serviceUri, new AzureSasCredential(sas));
+        }
+
+        // Branches 3 / 4 — Managed Identity / DefaultAzureCredential. The
+        // backend doesn't care which one; the SDK consumes the TokenCredential
+        // uniformly.
+        if (credentials.TokenCredential is { } tokenCredential)
+        {
+            return new BlobServiceClient(serviceUri, tokenCredential);
+        }
+
+        throw new InvalidOperationException(
+            $"Azure Blob credential source '{credentials.Description}' carries no usable branch. " +
+            "This is a wiring bug — credential factory methods should populate exactly one branch.");
+    }
+
+    /// <summary>
+    /// Builds the blob service URI. Operators may override the default
+    /// (<c>https://{accountName}.blob.core.windows.net</c>) via
+    /// <paramref name="endpointUrl"/> for Azure Stack, sovereign clouds, or
+    /// SAS-authenticated traffic against Azurite.
+    /// </summary>
+    private static Uri ResolveServiceUri(string accountName, string? endpointUrl)
+    {
+        if (!string.IsNullOrEmpty(endpointUrl))
+        {
+            return new Uri(endpointUrl);
+        }
+        return new Uri($"https://{accountName}.blob.core.windows.net");
     }
 
     /// <inheritdoc/>

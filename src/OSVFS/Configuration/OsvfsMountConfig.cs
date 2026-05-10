@@ -84,10 +84,40 @@ internal sealed class OsvfsMountConfig
     /// <see cref="Provider"/> is <see cref="ObjectStoreProvider.AzureBlob"/>).
     /// Carries account name, key, and endpoints in one TOML value — the
     /// shape Azurite hands out by default and what most operators paste from
-    /// the Azure Portal "Access keys" blade. SAS / Managed Identity /
-    /// <c>DefaultAzureCredential</c> get their own keys in Step 2B (#52).
+    /// the Azure Portal "Access keys" blade.
     /// </summary>
     public string? ConnectionString { get; init; }
+
+    /// <summary>
+    /// Azure Storage account name (the <c>{accountName}</c> in
+    /// <c>https://{accountName}.blob.core.windows.net</c>). Required by every
+    /// Azure auth branch except <see cref="ConnectionString"/> (which carries
+    /// the account name itself). Mapped to <c>account-name</c> in TOML.
+    /// </summary>
+    public string? AccountName { get; init; }
+
+    /// <summary>
+    /// Service- or account-level shared access signature for Azure Blob.
+    /// Combined with <see cref="AccountName"/> selects the SAS auth branch.
+    /// Mapped to <c>sas</c> in TOML.
+    /// </summary>
+    public string? Sas { get; init; }
+
+    /// <summary>
+    /// When true, Azure Blob auth uses
+    /// <c>Azure.Identity.ManagedIdentityCredential</c> bound to
+    /// <see cref="AccountName"/>. Mapped to <c>managed-identity</c> in TOML.
+    /// </summary>
+    public bool? ManagedIdentity { get; init; }
+
+    /// <summary>
+    /// When true, Azure Blob auth uses
+    /// <c>Azure.Identity.DefaultAzureCredential</c> bound to
+    /// <see cref="AccountName"/>. Picks up env vars, Visual Studio sign-in,
+    /// Azure CLI, Managed Identity, etc. in the SDK's documented order.
+    /// Mapped to <c>default-azure-credential</c> in TOML.
+    /// </summary>
+    public bool? DefaultAzureCredential { get; init; }
 
     /// <summary>
     /// rclone-style upload bandwidth ceiling (e.g. <c>"5M"</c>). Null disables.
@@ -164,6 +194,10 @@ internal sealed class OsvfsMountConfig
         EventQueue = overlay.EventQueue ?? EventQueue,
         AwsProfile = overlay.AwsProfile ?? AwsProfile,
         ConnectionString = overlay.ConnectionString ?? ConnectionString,
+        AccountName = overlay.AccountName ?? AccountName,
+        Sas = overlay.Sas ?? Sas,
+        ManagedIdentity = overlay.ManagedIdentity ?? ManagedIdentity,
+        DefaultAzureCredential = overlay.DefaultAzureCredential ?? DefaultAzureCredential,
         BandwidthUp = overlay.BandwidthUp ?? BandwidthUp,
         BandwidthDown = overlay.BandwidthDown ?? BandwidthDown,
         MultipartThreshold = overlay.MultipartThreshold ?? MultipartThreshold,

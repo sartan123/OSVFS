@@ -13,6 +13,10 @@
          the default API version forward of what Azurite ships, breaking the
          IT with InvalidHeaderValue. -->
     <PackageVersion Include="Azure.Storage.Blobs" Version="12.22.2" />
+    <!-- Azure.Identity ships DefaultAzureCredential and ManagedIdentityCredential
+         alongside the storage SDK. Version pinned for source-build compatibility
+         with Azure.Storage.Blobs 12.22. -->
+    <PackageVersion Include="Azure.Identity" Version="1.13.2" />
     <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.5.0" />
     <PackageVersion Include="OpenTelemetry" Version="1.15.3" />
     <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />

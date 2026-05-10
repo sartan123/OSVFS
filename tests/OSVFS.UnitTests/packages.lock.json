@@ -187,6 +187,28 @@
         "resolved": "10.0.7",
         "contentHash": "D5M0Jr551iTgwkZMN9rm0pSkgNLj5quUWQUmQPMZh7k/bnvZTnXRGfE2KuvXf1EEjt/ofD9yw9IumpgdP9QCnw=="
       },
+      "Microsoft.Identity.Client": {
+        "type": "Transitive",
+        "resolved": "4.67.2",
+        "contentHash": "37t0TfekfG6XM8kue/xNaA66Qjtti5Qe1xA41CK+bEd8VD76/oXJc+meFJHGzygIC485dCpKoamG/pDfb9Qd7Q==",
+        "dependencies": {
+          "Microsoft.IdentityModel.Abstractions": "6.35.0"
+        }
+      },
+      "Microsoft.Identity.Client.Extensions.Msal": {
+        "type": "Transitive",
+        "resolved": "4.67.2",
+        "contentHash": "DKs+Lva6csEUZabw+JkkjtFgVmcXh4pJeQy5KH5XzPOaKNoZhAMYj1qpKd97qYTZKXIFH12bHPk0DA+6krw+Cw==",
+        "dependencies": {
+          "Microsoft.Identity.Client": "4.67.2",
+          "System.Security.Cryptography.ProtectedData": "4.5.0"
+        }
+      },
+      "Microsoft.IdentityModel.Abstractions": {
+        "type": "Transitive",
+        "resolved": "6.35.0",
+        "contentHash": "xuR8E4Rd96M41CnUSCiOJ2DBh+z+zQSmyrYHdYhD6K4fXBcQGVnRCFQ0efROUYpP+p0zC1BLKr0JRpVuujTZSg=="
+      },
       "Microsoft.SourceLink.Common": {
         "type": "Transitive",
         "resolved": "10.0.203",
@@ -303,6 +325,7 @@
           "AWSSDK.SQS": "[4.0.2.28, )",
           "AWSSDK.SSO": "[4.0.2.13, )",
           "AWSSDK.SSOOIDC": "[4.0.3, )",
+          "Azure.Identity": "[1.13.2, )",
           "Azure.Storage.Blobs": "[12.22.2, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.7, )"
         }
@@ -341,6 +364,17 @@
         "contentHash": "waL3X32i5yhu2w57PyQrFoM4it0B0HWeFrelrL4mskWJryksUolE7jngLEy7mfHMThjJ8kh6n1QSOJhhiRilnA==",
         "dependencies": {
           "AWSSDK.Core": "[4.0.1.2, 5.0.0)"
+        }
+      },
+      "Azure.Identity": {
+        "type": "CentralTransitive",
+        "requested": "[1.13.2, )",
+        "resolved": "1.13.2",
+        "contentHash": "CngQVQELdzFmsGSWyGIPIUOCrII7nApMVWxVmJCKQQrWxRXcNquCsZ+njRJRnhFUfD+KMAhpjyRCaceE4EOL6A==",
+        "dependencies": {
+          "Azure.Core": "1.44.1",
+          "Microsoft.Identity.Client": "4.67.2",
+          "Microsoft.Identity.Client.Extensions.Msal": "4.67.2"
         }
       },
       "Azure.Storage.Blobs": {
