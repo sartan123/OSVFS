@@ -113,6 +113,25 @@
 # retries; 4xx client errors fail immediately regardless of this value.
 # retry-max-attempts = 3
 
+# Maximum number of in-flight UploadAsync calls. One save = one permit,
+# regardless of how many multipart parts the SDK fans the call out into.
+# Default 4. Lower this on flaky upstreams to keep retry storms manageable;
+# raise it for many-small-files workloads. Must be >= 1.
+# max-concurrent-uploads = 4
+
+# Maximum number of in-flight ReadRangeAsync calls (one per ProjFS hydration
+# request). Default 8. Raise it for read-heavy workloads on a fat link;
+# lower it on metered or shared connections. Must be >= 1.
+# max-concurrent-downloads = 8
+
+# Multipart parts uploaded in parallel inside a single UploadAsync call.
+# Threaded through to TransferUtilityConfig.ConcurrentServiceRequests.
+# Default 10. Higher values speed up single-large-file uploads on fat links;
+# lower values reduce burst pressure on the bucket. Peak in-flight S3 part
+# PUTs at any instant is at most max-concurrent-uploads * max-multipart-parts.
+# Must be >= 1.
+# max-multipart-parts = 10
+
 # Console log output format. "text" (default) writes single-line, human-
 # readable output; "json" writes one UTF-8 JSON object per line with UTC
 # timestamps for log shippers such as Datadog or Loki.
