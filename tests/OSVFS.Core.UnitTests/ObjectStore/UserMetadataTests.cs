@@ -5,6 +5,13 @@ namespace OSVFS.Core.UnitTests.ObjectStore;
 
 public class UserMetadataTests
 {
+    /// <summary>
+    /// Mirrors the S3 backend's per-object byte ceiling (2 KiB). Used as the
+    /// validation limit so the unit tests exercise the same threshold
+    /// production code applies to S3 uploads.
+    /// </summary>
+    private const int S3MaxBytes = 2 * 1024;
+
     [Fact]
     public void Normalize_lowercases_keys_and_drops_null_or_empty_names()
     {
@@ -34,13 +41,13 @@ public class UserMetadataTests
     [Fact]
     public void EnsureWithinSizeLimit_accepts_payloads_at_or_below_limit()
     {
-        // Total bytes = key + value lengths. 1024 + 1024 = 2048 = MaxTotalBytes exactly.
+        // Total bytes = key + value lengths. 1024 + 1024 = 2048 = the S3 limit exactly.
         var payload = new Dictionary<string, string>
         {
             [new string('k', 1024)] = new string('v', 1024),
         };
 
-        UserMetadata.EnsureWithinSizeLimit(payload);
+        UserMetadata.EnsureWithinSizeLimit(payload, S3MaxBytes);
     }
 
     [Fact]
@@ -53,8 +60,9 @@ public class UserMetadataTests
         };
 
         var ex = Assert.Throws<UserMetadataTooLargeException>(
-            () => UserMetadata.EnsureWithinSizeLimit(payload));
-        Assert.True(ex.ActualBytes > UserMetadata.MaxTotalBytes);
+            () => UserMetadata.EnsureWithinSizeLimit(payload, S3MaxBytes));
+        Assert.True(ex.ActualBytes > S3MaxBytes);
+        Assert.Equal(S3MaxBytes, ex.LimitBytes);
     }
 
     [Fact]
@@ -67,6 +75,22 @@ public class UserMetadataTests
         };
 
         Assert.Throws<UserMetadataTooLargeException>(
-            () => UserMetadata.EnsureWithinSizeLimit(payload));
+            () => UserMetadata.EnsureWithinSizeLimit(payload, S3MaxBytes));
+    }
+
+    [Fact]
+    public void EnsureWithinSizeLimit_uses_caller_supplied_limit_for_higher_quota_providers()
+    {
+        // Azure Blob and GCS allow 8 KiB; the same payload that breaches the
+        // 2 KiB S3 ceiling must validate cleanly when an 8 KiB ceiling is supplied.
+        const int AzureLikeLimit = 8 * 1024;
+        var payload = new Dictionary<string, string>
+        {
+            [new string('k', 1024)] = new string('v', 3072),
+        };
+
+        UserMetadata.EnsureWithinSizeLimit(payload, AzureLikeLimit);
+        Assert.Throws<UserMetadataTooLargeException>(
+            () => UserMetadata.EnsureWithinSizeLimit(payload, S3MaxBytes));
     }
 }
