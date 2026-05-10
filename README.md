@@ -584,6 +584,54 @@ When `--otlp-endpoint` is supplied, it overrides `[telemetry] otlp-endpoint`
 while preserving the file's `otlp-protocol` and `service-name` keys.
 Telemetry stays disabled when neither source supplies an endpoint.
 
+#### Local Prometheus `/metrics` endpoint
+
+For environments where running an OTLP collector is impractical (single
+host, scratch box, CI worker), the OSVFS host can expose metrics
+directly over HTTP in Prometheus text exposition format. Configure
+`metrics-listen` (or pass `--metrics-listen host:port` for a one-off
+run); the listener is independent of `otlp-endpoint`, so you can run
+either or both:
+
+```powershell
+osvfs --metrics-listen 127.0.0.1:9999            # /metrics only
+osvfs --metrics-listen 127.0.0.1:9999 `
+      --otlp-endpoint http://localhost:4317      # both pipelines
+```
+
+```toml
+# osvfs.toml — pull-style metrics via Prometheus scrape
+[telemetry]
+metrics-listen = "127.0.0.1:9999"
+```
+
+Three endpoints are mounted on the same port:
+
+| Path        | Purpose                                                                                             |
+| ----------- | --------------------------------------------------------------------------------------------------- |
+| `/metrics`  | Prometheus text v0.0.4 exposition; pulls a fresh metric snapshot per scrape via `MetricReader.Collect`. |
+| `/healthz`  | Flat-text liveness probe (always `200 OK\nok`).                                                     |
+| `/version`  | Assembly informational version (mirrors the OTel resource version).                                 |
+
+Loopback (`127.0.0.1`, `[::1]`, `localhost`) is recommended; binding to a
+wildcard host (`0.0.0.0`, `+`, `[::]`) exposes internal counters on every
+interface and emits a startup warning. On Windows, non-loopback prefixes
+also require an `netsh http add urlacl` reservation when running as a
+non-admin user.
+
+A ready-to-use scrape config is checked in at
+[`examples/otel/prometheus.yml`](./examples/otel/prometheus.yml). It
+defines two jobs — one for the OTel Collector push path
+(`otelcol:9464`) and one for the direct `/metrics` pull path
+(`host.docker.internal:9999`) — so the same file works for both. Adjust
+the `targets:` entry if you bound the listener to a non-default
+host:port.
+
+The metric names match the OTLP path exactly (e.g.
+`osvfs_s3_bytes_uploaded_bytes_total`,
+`osvfs_s3_duration_milliseconds_bucket`), so the queries listed below for
+the OTLP collector path apply unchanged.
+
 #### Run a local collector + Jaeger + Prometheus
 
 A ready-to-run sample stack (OpenTelemetry Collector contrib + Jaeger
@@ -594,7 +642,7 @@ v2 + Prometheus) is checked in under
 | --- | --- |
 | [`examples/otel/docker-compose.yml`](./examples/otel/docker-compose.yml) | Brings up `jaeger`, `prometheus`, and `otelcol`. Exposes 4317 (OTLP gRPC), 4318 (OTLP HTTP), 16686 (Jaeger UI), 9090 (Prometheus UI). |
 | [`examples/otel/otelcol.yaml`](./examples/otel/otelcol.yaml) | Collector pipeline: OTLP receiver → Jaeger (traces) + Prometheus exporter on 9464 (metrics). |
-| [`examples/otel/prometheus.yml`](./examples/otel/prometheus.yml) | Prometheus scrape config pointing at `otelcol:9464`. |
+| [`examples/otel/prometheus.yml`](./examples/otel/prometheus.yml) | Prometheus scrape config with two jobs: `otelcol:9464` (push path) and `host.docker.internal:9999` (direct `/metrics` pull path). |
 
 Start the stack and the OSVFS host:
 
@@ -703,6 +751,7 @@ event-queue          = ""                        # SQS URL/name, required for ev
 otlp-endpoint        = "http://localhost:4317"   # OTLP collector URL
 otlp-protocol        = "grpc"                    # "grpc" | "http-protobuf"
 service-name         = "osvfs"                   # service.name resource attribute
+metrics-listen       = "127.0.0.1:9999"          # local Prometheus /metrics listener (host:port)
 ```
 
 A ready-to-edit sample is shipped as

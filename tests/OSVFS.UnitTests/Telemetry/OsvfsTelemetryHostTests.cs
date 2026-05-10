@@ -39,7 +39,7 @@ public class OsvfsTelemetryHostTests
             ServiceName = "from-file",
         };
 
-        var effective = OsvfsTelemetryHost.ResolveEffectiveConfig(fileConfig, null);
+        var effective = OsvfsTelemetryHost.ResolveEffectiveConfig(fileConfig, null, null);
 
         Assert.Same(fileConfig, effective);
     }
@@ -52,20 +52,68 @@ public class OsvfsTelemetryHostTests
             OtlpEndpoint = "http://from-file:4317",
             OtlpProtocol = OtlpProtocolKind.HttpProtobuf,
             ServiceName = "preserved-service",
+            MetricsListen = "127.0.0.1:9999",
         };
 
-        var effective = OsvfsTelemetryHost.ResolveEffectiveConfig(fileConfig, "http://from-cli:4318");
+        var effective = OsvfsTelemetryHost.ResolveEffectiveConfig(fileConfig, "http://from-cli:4318", null);
 
         Assert.NotNull(effective);
         Assert.Equal("http://from-cli:4318", effective!.OtlpEndpoint);
         Assert.Equal(OtlpProtocolKind.HttpProtobuf, effective.OtlpProtocol);
         Assert.Equal("preserved-service", effective.ServiceName);
+        Assert.Equal("127.0.0.1:9999", effective.MetricsListen);
+    }
+
+    [Fact]
+    public void ResolveEffectiveConfig_substitutes_cli_metrics_listen_but_keeps_file_endpoint()
+    {
+        var fileConfig = new OsvfsTelemetryConfig
+        {
+            OtlpEndpoint = "http://from-file:4317",
+            OtlpProtocol = OtlpProtocolKind.Grpc,
+            ServiceName = "preserved-service",
+            MetricsListen = "127.0.0.1:9999",
+        };
+
+        var effective = OsvfsTelemetryHost.ResolveEffectiveConfig(fileConfig, null, "0.0.0.0:9090");
+
+        Assert.NotNull(effective);
+        Assert.Equal("http://from-file:4317", effective!.OtlpEndpoint);
+        Assert.Equal(OtlpProtocolKind.Grpc, effective.OtlpProtocol);
+        Assert.Equal("preserved-service", effective.ServiceName);
+        Assert.Equal("0.0.0.0:9090", effective.MetricsListen);
+    }
+
+    [Fact]
+    public void ResolveEffectiveConfig_returns_file_with_metrics_only()
+    {
+        var fileConfig = new OsvfsTelemetryConfig { MetricsListen = "127.0.0.1:9999" };
+
+        var effective = OsvfsTelemetryHost.ResolveEffectiveConfig(fileConfig, null, null);
+
+        Assert.Same(fileConfig, effective);
+    }
+
+    [Fact]
+    public void ResolveEffectiveConfig_cli_metrics_listen_alone_creates_config()
+    {
+        var effective = OsvfsTelemetryHost.ResolveEffectiveConfig(null, null, "127.0.0.1:9999");
+
+        Assert.NotNull(effective);
+        Assert.Null(effective!.OtlpEndpoint);
+        Assert.Equal("127.0.0.1:9999", effective.MetricsListen);
     }
 
     [Fact]
     public void ResolveEffectiveConfig_returns_null_when_neither_source_supplies_endpoint()
     {
-        Assert.Null(OsvfsTelemetryHost.ResolveEffectiveConfig(null, null));
-        Assert.Null(OsvfsTelemetryHost.ResolveEffectiveConfig(null, "   "));
+        Assert.Null(OsvfsTelemetryHost.ResolveEffectiveConfig(null, null, null));
+        Assert.Null(OsvfsTelemetryHost.ResolveEffectiveConfig(null, "   ", "   "));
+    }
+
+    [Fact]
+    public void Create_returns_null_when_only_metrics_listen_is_blank_and_no_otlp()
+    {
+        Assert.Null(OsvfsTelemetryHost.Create(new OsvfsTelemetryConfig { MetricsListen = "   " }));
     }
 }

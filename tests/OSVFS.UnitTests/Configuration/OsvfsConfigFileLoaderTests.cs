@@ -160,6 +160,7 @@ public class OsvfsConfigFileLoaderTests
             otlp-endpoint = "http://collector:4317"
             otlp-protocol = "http-protobuf"
             service-name = "osvfs-prod"
+            metrics-listen = "127.0.0.1:9999"
             """;
 
         var config = OsvfsConfigFileLoader.ParseContent(toml, "test.toml");
@@ -168,6 +169,21 @@ public class OsvfsConfigFileLoaderTests
         Assert.Equal("http://collector:4317", config.Telemetry!.OtlpEndpoint);
         Assert.Equal(OtlpProtocolKind.HttpProtobuf, config.Telemetry.OtlpProtocol);
         Assert.Equal("osvfs-prod", config.Telemetry.ServiceName);
+        Assert.Equal("127.0.0.1:9999", config.Telemetry.MetricsListen);
+    }
+
+    [Fact]
+    public void Parse_telemetry_metrics_listen_snake_alias_accepted()
+    {
+        const string toml = """
+            [telemetry]
+            metrics_listen = "127.0.0.1:9090"
+            """;
+
+        var config = OsvfsConfigFileLoader.ParseContent(toml, "test.toml");
+
+        Assert.NotNull(config.Telemetry);
+        Assert.Equal("127.0.0.1:9090", config.Telemetry!.MetricsListen);
     }
 
     [Fact]

@@ -32,6 +32,16 @@ internal sealed class OsvfsTelemetryConfig
     public string? ServiceName { get; init; }
 
     /// <summary>
+    /// <c>host:port</c> address the local Prometheus-compatible
+    /// <c>/metrics</c> HTTP listener binds to (e.g.
+    /// <c>127.0.0.1:9999</c>). Null leaves the listener disabled. Loopback
+    /// addresses are recommended; binding to <c>0.0.0.0</c> exposes the
+    /// endpoint on the network and should be paired with an external
+    /// firewall rule.
+    /// </summary>
+    public string? MetricsListen { get; init; }
+
+    /// <summary>
     /// Returns a copy of this config with non-null values from
     /// <paramref name="overlay"/> winning per-key. Used by the layered
     /// config loader (exe-adjacent → user-global → CLI <c>--config</c>).
@@ -41,6 +51,7 @@ internal sealed class OsvfsTelemetryConfig
         OtlpEndpoint = overlay.OtlpEndpoint ?? OtlpEndpoint,
         OtlpProtocol = overlay.OtlpProtocol ?? OtlpProtocol,
         ServiceName = overlay.ServiceName ?? ServiceName,
+        MetricsListen = overlay.MetricsListen ?? MetricsListen,
     };
 }
 

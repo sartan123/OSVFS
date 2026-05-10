@@ -214,6 +214,7 @@ internal static class OsvfsConfigFileLoader
             OtlpEndpoint = ReadString(section, "otlp-endpoint", "otlp_endpoint", sourcePath),
             OtlpProtocol = ReadOtlpProtocol(section, sourcePath),
             ServiceName = ReadString(section, "service-name", "service_name", sourcePath),
+            MetricsListen = ReadString(section, "metrics-listen", "metrics_listen", sourcePath),
         };
     }
 
