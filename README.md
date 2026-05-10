@@ -145,7 +145,7 @@ exposes just three things:
 
 | Surface | Purpose |
 | --- | --- |
-| Sub-commands (`mount`, `mount-all`, `credentials`) | Pick which mount(s) to start, or manage the encrypted credential store. |
+| Sub-commands (`mount`, `mount-all`, `credentials`, `doctor`) | Pick which mount(s) to start, manage the encrypted credential store, or run the environment self-check. |
 | `--name <mount>` | Selects an entry from the `[[mount]]` array on `osvfs mount`. |
 | `--verbose`, `--log-format` | Process-level overrides for one-off debugging. The TOML keys (`verbose`, `log-format`) are still honoured; the CLI flags simply win when both are present. |
 
@@ -627,6 +627,59 @@ Each entry is stored as a Windows generic credential under the target name
 copying the entry to another user — or to another machine — will fail to
 decrypt. Treat the OSVFS store as a per-user convenience cache, not as a
 backup of your AWS credentials.
+
+## Troubleshooting
+
+When a mount refuses to start — `StartVirtualizing failed`, "bucket not
+found", "AccessDenied", credentials expired — **run `osvfs doctor`
+first**. The doctor performs a fixed sequence of read-only environment
+checks and prints a colored summary:
+
+```powershell
+# Use the first [[mount]] in osvfs.toml as the bucket / region / profile context
+osvfs doctor
+
+# Override the context entirely (handy when you have no config yet)
+osvfs doctor --bucket my-bucket --region eu-central-1 --profile prod
+
+# LocalStack / MinIO style
+osvfs doctor --bucket my-bucket --endpoint-url http://localhost:4566
+```
+
+The doctor verifies, in order:
+
+1. **Windows ProjFS feature (`Client-ProjFS`)** — registry check that the
+   PrjFlt minifilter is registered and the user-mode `ProjectedFSLib.dll`
+   is present. Equivalent to
+   `Get-WindowsOptionalFeature -FeatureName Client-ProjFS`.
+2. **`StartVirtualizing` smoke test** — creates a throwaway directory,
+   marks it as a virtualization root, calls `StartVirtualizing`, then
+   tears everything down. Catches "feature installed but PrjFlt service
+   stopped" and EDR / antivirus interference that the registry check
+   cannot see.
+3. **AWS credentials resolution** — resolves credentials from the OSVFS
+   profile (`--profile`) or the SDK chain, reports the source and the
+   last 4 chars of the access key id, and flags whether the credentials
+   are temporary (session-token bearing).
+4. **Bucket access (`HeadBucket`)** — calls `GetBucketLocation`. A 403
+   means the principal can't list the bucket; a 404 typically means the
+   region is wrong.
+5. **Bucket versioning** — required by OSVFS for safe conflict
+   resolution. Reports the exact `aws s3api put-bucket-versioning`
+   command when the bucket has versioning suspended or never enabled.
+
+Each row is prefixed by `[OK]`, `[!!]`, `[XX]`, or `[--]` (skipped). The
+process exits **0** when every check passes (skips and warnings do not
+count) and **2** when any check needs operator action, so the doctor is
+also safe to wire into start-up scripts:
+
+```powershell
+osvfs doctor --bucket $env:OSVFS_BUCKET; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+osvfs mount-all
+```
+
+`NO_COLOR=1` and redirected stdout disable the ANSI escape codes so the
+output stays clean for log shippers and CI.
 
 ## Architecture
 

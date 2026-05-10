@@ -3,6 +3,7 @@ using System.CommandLine;
 using OSVFS;
 using OSVFS.Configuration;
 using OSVFS.Credentials;
+using OSVFS.Diagnostics;
 using OSVFS.Logging;
 using OSVFS.ProjFs;
 
@@ -21,6 +22,7 @@ cliOptions.AddTo(rootCommand);
 rootCommand.Subcommands.Add(CredentialsCommandFactory.Build(credentialStore));
 rootCommand.Subcommands.Add(MountCommandFactory.BuildMountCommand(credentialStore, cliOptions));
 rootCommand.Subcommands.Add(MountCommandFactory.BuildMountAllCommand(credentialStore, cliOptions));
+rootCommand.Subcommands.Add(DoctorCommandFactory.Build(credentialStore, cliOptions));
 
 rootCommand.SetAction(parseResult =>
 {
