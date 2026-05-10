@@ -74,7 +74,9 @@ internal static class MountOptionsBuilder
             throw new OsvfsConfigException($"Mount '{mount.Name}': {ex.Message}", ex);
         }
 
-        if (MultipartSettingsValidator.Validate(multipartThresholdBytes, multipartPartSizeBytes) is { } error)
+        var multipartCapabilities = MultipartCapabilities.For(mount.Provider ?? ObjectStoreProvider.S3);
+        if (MultipartSettingsValidator.Validate(
+                multipartThresholdBytes, multipartPartSizeBytes, multipartCapabilities) is { } error)
         {
             throw new OsvfsConfigException($"Mount '{mount.Name}': {error}");
         }
