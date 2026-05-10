@@ -44,6 +44,13 @@ internal interface IObjectStoreBackend : IDisposable
     /// remediation message and free of any surrounding wording.
     /// </summary>
     string GetEnableVersioningInstructions();
+    /// Combined UTF-8 byte ceiling for user-defined metadata names+values that
+    /// the provider accepts on a single object. Surfaced so callers can
+    /// pre-validate against the right limit (S3: 2 KiB <c>x-amz-meta-*</c>;
+    /// Azure Blob: 8 KiB <c>x-ms-meta-*</c>; GCS: 8 KiB metadata block) before
+    /// initiating an upload.
+    /// </summary>
+    int UserMetadataMaxBytes { get; }
 
     /// <summary>
     /// Returns metadata for a single object, or a synthesized directory entry if the

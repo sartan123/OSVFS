@@ -54,6 +54,14 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
     /// </summary>
     public const int MaxMultipartPartCount = 10_000;
 
+    /// <summary>
+    /// Combined UTF-8 byte limit for user-defined metadata names+values
+    /// enforced by S3 (<c>x-amz-meta-*</c> headers): 2 KiB per object. Azure
+    /// Blob and GCS use larger ceilings (8 KiB), which is why this lives in
+    /// the S3-specific surface rather than on the cross-provider helper.
+    /// </summary>
+    public const int UserMetadataMaxByteCount = 2 * 1024;
+
     private readonly string bucketName;
 
     private readonly string keyPrefix;
@@ -381,6 +389,9 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
     }
 
     /// <inheritdoc/>
+    public int UserMetadataMaxBytes => UserMetadataMaxByteCount;
+
+    /// <inheritdoc/>
     public async Task<BucketVersioningStatus> GetBucketVersioningStatusAsync(CancellationToken ct)
     {
         var resp = await WithRefreshRetryAsync(() => client.GetBucketVersioningAsync(new GetBucketVersioningRequest
@@ -541,7 +552,7 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
         try
         {
             normalizedMetadata = ObjectStore.UserMetadata.Normalize(userMetadata);
-            ObjectStore.UserMetadata.EnsureWithinSizeLimit(normalizedMetadata);
+            ObjectStore.UserMetadata.EnsureWithinSizeLimit(normalizedMetadata, UserMetadataMaxBytes);
         }
         catch (Exception ex)
         {
