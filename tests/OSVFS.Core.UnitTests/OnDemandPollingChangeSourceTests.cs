@@ -356,6 +356,8 @@ public sealed class OnDemandPollingChangeSourceTests
             throw new NotImplementedException();
         public Task<BucketVersioningStatus> GetBucketVersioningStatusAsync(CancellationToken c) =>
             throw new NotImplementedException();
+        public string GetEnableVersioningInstructions() =>
+            throw new NotImplementedException();
         public Task<ObjectInfo?> HeadAsync(string r, CancellationToken c) =>
             throw new NotImplementedException();
         public Task ReadRangeAsync(string r, long o, long l, Stream d, CancellationToken c) =>

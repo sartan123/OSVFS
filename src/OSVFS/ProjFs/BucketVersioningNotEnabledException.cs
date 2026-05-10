@@ -22,11 +22,12 @@ internal sealed class BucketVersioningNotEnabledException : Exception
 
     /// <summary>
     /// Initializes the exception with a multi-line message containing the bucket
-    /// name, the AWS CLI fix command, the README anchor, and the <c>--allow-unversioned</c>
-    /// escape hatch.
+    /// name, the provider-specific fix command supplied by the backend, and the
+    /// <c>--allow-unversioned</c> escape hatch.
     /// </summary>
-    public BucketVersioningNotEnabledException(string bucket, BucketVersioningStatus status)
-        : base(BuildMessage(bucket, status))
+    public BucketVersioningNotEnabledException(
+        string bucket, BucketVersioningStatus status, string enableVersioningInstructions)
+        : base(BuildMessage(bucket, status, enableVersioningInstructions))
     {
         Bucket = bucket;
         Status = status;
@@ -35,16 +36,20 @@ internal sealed class BucketVersioningNotEnabledException : Exception
     /// <summary>
     /// Renders the operator-facing remediation message. Kept on a static helper
     /// so unit tests can assert against the exact wording without instantiating
-    /// the exception.
+    /// the exception. <paramref name="enableVersioningInstructions"/> comes from
+    /// the active backend (<c>S3</c>: AWS CLI; future <c>azureblob</c> /
+    /// <c>gcs</c>: their respective CLIs) and is dropped in verbatim — it is
+    /// already indented for this message.
     /// </summary>
-    public static string BuildMessage(string bucket, BucketVersioningStatus status) =>
+    public static string BuildMessage(
+        string bucket, BucketVersioningStatus status, string enableVersioningInstructions) =>
         $"Bucket versioning must be Enabled on '{bucket}' (current: {status}). " +
         "OSVFS refuses to start because local edits and deletes propagate to the " +
         "object store as overwrites and DeleteObject calls, and versioning is what " +
         "makes those recoverable." + Environment.NewLine +
         Environment.NewLine +
         "Enable it with:" + Environment.NewLine +
-        $"  aws s3api put-bucket-versioning --bucket {bucket} --versioning-configuration Status=Enabled" +
+        enableVersioningInstructions +
         Environment.NewLine +
         Environment.NewLine +
         "To bypass this check (CI / disposable buckets only), pass --allow-unversioned.";

@@ -15,10 +15,14 @@ internal static class BucketVersioningGuard
     /// versioning is enabled; logs a warning when versioning is disabled but the
     /// operator opted in via <paramref name="allowUnversioned"/>; or throws
     /// <see cref="BucketVersioningNotEnabledException"/> otherwise.
+    /// <paramref name="enableVersioningInstructions"/> is supplied by the active
+    /// backend so the thrown remediation message names the right CLI for the
+    /// configured provider.
     /// </summary>
     public static void Validate(
         BucketVersioningStatus status,
         string bucket,
+        string enableVersioningInstructions,
         bool allowUnversioned,
         ILogger logger)
     {
@@ -30,7 +34,7 @@ internal static class BucketVersioningGuard
 
         if (!allowUnversioned)
         {
-            throw new BucketVersioningNotEnabledException(bucket, status);
+            throw new BucketVersioningNotEnabledException(bucket, status, enableVersioningInstructions);
         }
 
         // The operator has chosen to bypass the safety check; surface the danger
