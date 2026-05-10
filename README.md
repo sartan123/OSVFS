@@ -628,6 +628,42 @@ copying the entry to another user — or to another machine — will fail to
 decrypt. Treat the OSVFS store as a per-user convenience cache, not as a
 backup of your AWS credentials.
 
+#### Sign in via AWS IAM Identity Center (SSO)
+
+For environments that use AWS IAM Identity Center (formerly AWS SSO),
+`osvfs credentials sso` runs the full OAuth device-authorization flow:
+register a public OIDC client, open the user portal in the default browser,
+poll `CreateToken` until you approve the request, exchange the resulting
+bearer token for short-term role credentials, and save them under the
+requested profile name.
+
+```powershell
+osvfs credentials sso `
+  --start-url   https://my-org.awsapps.com/start `
+  --region      us-east-1 `
+  --account-id  123456789012 `
+  --role-name   ReadOnly `
+  --profile     prod
+```
+
+The bearer token (and the OIDC client registration) is cached encrypted with
+DPAPI under the target name `OSVFS:sso-cache:<startUrl>`, so subsequent runs
+within the token's lifetime skip the browser prompt and only refresh the role
+credentials. Once a profile has been populated this way, reference it from
+`osvfs.toml` exactly like a static profile (`aws-profile = "prod"`).
+
+Re-run the command at any time to refresh the role credentials. To verify on
+a real environment, install the published binary and run:
+
+```powershell
+.\publish\win-x64\osvfs.exe credentials sso `
+  --start-url <your-start-url> --region <your-sso-region> `
+  --account-id <account> --role-name <role> --profile sso-test
+
+.\publish\win-x64\osvfs.exe credentials get --profile sso-test
+.\publish\win-x64\osvfs.exe doctor --bucket <your-bucket> --region <bucket-region> --profile sso-test
+```
+
 ## Troubleshooting
 
 When a mount refuses to start — `StartVirtualizing failed`, "bucket not

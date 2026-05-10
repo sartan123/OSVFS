@@ -137,6 +137,8 @@
         "dependencies": {
           "AWSSDK.S3": "[4.0.22.2, )",
           "AWSSDK.SQS": "[4.0.2.28, )",
+          "AWSSDK.SSO": "[4.0.2.13, )",
+          "AWSSDK.SSOOIDC": "[4.0.3, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.7, )"
         }
       },
@@ -156,6 +158,24 @@
         "contentHash": "MHyrr8ac6eKcrOefyBkbj+/PbWvfXOVp/10PzpF+nVyb6HwBnFKgFlmgooaR8jEivZmQDeYMtM0Uh3y9YZOseg==",
         "dependencies": {
           "AWSSDK.Core": "[4.0.6.1, 5.0.0)"
+        }
+      },
+      "AWSSDK.SSO": {
+        "type": "CentralTransitive",
+        "requested": "[4.0.2.13, )",
+        "resolved": "4.0.2.13",
+        "contentHash": "u/hTZe9m+th0A7QYRMtMhXsm4CUzofwpJH7WnfzIOpPrUHrqZs2T01I0r0XvbiYsrw5RQEqId5qnZP/tdXYR7w==",
+        "dependencies": {
+          "AWSSDK.Core": "[4.0.3.12, 5.0.0)"
+        }
+      },
+      "AWSSDK.SSOOIDC": {
+        "type": "CentralTransitive",
+        "requested": "[4.0.3, )",
+        "resolved": "4.0.3",
+        "contentHash": "waL3X32i5yhu2w57PyQrFoM4it0B0HWeFrelrL4mskWJryksUolE7jngLEy7mfHMThjJ8kh6n1QSOJhhiRilnA==",
+        "dependencies": {
+          "AWSSDK.Core": "[4.0.1.2, 5.0.0)"
         }
       },
       "Microsoft.Extensions.Logging.Abstractions": {
