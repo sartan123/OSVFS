@@ -195,7 +195,12 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
             return false;
         }
 
-        BucketVersioningGuard.Validate(status, Options.Bucket, Options.AllowUnversioned, logger);
+        BucketVersioningGuard.Validate(
+            status,
+            Options.Bucket,
+            backend.GetEnableVersioningInstructions(),
+            Options.AllowUnversioned,
+            logger);
         return true;
     }
 

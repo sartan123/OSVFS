@@ -397,6 +397,10 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
     }
 
     /// <inheritdoc/>
+    public string GetEnableVersioningInstructions() =>
+        $"  aws s3api put-bucket-versioning --bucket {bucketName} --versioning-configuration Status=Enabled";
+
+    /// <inheritdoc/>
     public async Task<ObjectInfo?> HeadAsync(string relativePath, CancellationToken ct)
     {
         using var scope = OsvfsTelemetry.StartS3Operation("S3.Head");

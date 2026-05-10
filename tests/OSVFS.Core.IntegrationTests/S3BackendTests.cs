@@ -69,6 +69,19 @@ public sealed class S3BackendTests : IAsyncLifetime
     }
 
     [Fact]
+    public void GetEnableVersioningInstructions_returns_aws_cli_command_for_bucket()
+    {
+        // Surfaced through BucketVersioningNotEnabledException; format must
+        // stay stable (it's documented in the README's "Why versioning matters"
+        // section). The command takes the bucket name verbatim.
+        var instructions = backend.GetEnableVersioningInstructions();
+        Assert.Contains(
+            $"aws s3api put-bucket-versioning --bucket {bucket} --versioning-configuration Status=Enabled",
+            instructions,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task GetBucketVersioningStatus_treats_Suspended_as_NotEnabled()
     {
         // Suspended is not "actively protecting writes", so the backend collapses it into

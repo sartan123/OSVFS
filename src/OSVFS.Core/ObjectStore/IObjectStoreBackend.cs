@@ -36,6 +36,16 @@ internal interface IObjectStoreBackend : IDisposable
     Task<BucketVersioningStatus> GetBucketVersioningStatusAsync(CancellationToken ct);
 
     /// <summary>
+    /// Provider-specific operator instructions for enabling versioning on the
+    /// linked bucket/container. Surfaced through the
+    /// <c>BucketVersioningNotEnabledException</c> message so the operator can
+    /// fix the bucket without leaving the terminal. Returned as a single
+    /// copy-pasteable command (or multi-line block) — already indented for the
+    /// remediation message and free of any surrounding wording.
+    /// </summary>
+    string GetEnableVersioningInstructions();
+
+    /// <summary>
     /// Returns metadata for a single object, or a synthesized directory entry if the
     /// path corresponds to a common prefix; null when nothing matches.
     /// </summary>
