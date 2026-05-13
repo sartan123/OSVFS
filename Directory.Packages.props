@@ -12,7 +12,7 @@
          3.35 (the floating "latest" tag we run in IT). Newer SDK builds raise
          the default API version forward of what Azurite ships, breaking the
          IT with InvalidHeaderValue. -->
-    <PackageVersion Include="Azure.Storage.Blobs" Version="12.22.2" />
+    <PackageVersion Include="Azure.Storage.Blobs" Version="12.27.0" />
     <!-- Azure Storage Queue carries Event Grid notifications for blob changes;
          pinned alongside Azure.Storage.Blobs 12.22 for consistency. -->
     <PackageVersion Include="Azure.Storage.Queues" Version="12.20.1" />
