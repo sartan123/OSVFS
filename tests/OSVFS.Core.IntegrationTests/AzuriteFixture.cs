@@ -17,12 +17,19 @@ public sealed class AzuriteFixture : IAsyncLifetime
     /// </summary>
     public const string AccountName = "devstoreaccount1";
 
-    // Use the floating "latest" Azurite tag so the running container speaks
-    // the same x-ms-version the Azure SDK we ship sends. Pinning a specific
-    // older tag (e.g. 3.32) used to break the IT every time the SDK rolled
-    // its default API version forward.
+    // Use the floating "latest" Azurite tag, and pass --skipApiVersionCheck so a
+    // newer Azure.Storage.Blobs SDK (whose default x-ms-version Azurite has not
+    // shipped support for yet) does not break the IT with InvalidHeaderValue.
+    // WithCommand replaces — rather than appends to — the builder's default
+    // command, so the --blobHost / --queueHost / --tableHost flags from
+    // AzuriteBuilder.Init() have to be re-specified here.
     private readonly AzuriteContainer container =
         new AzuriteBuilder("mcr.microsoft.com/azure-storage/azurite:latest")
+            .WithCommand(
+                "--blobHost", "0.0.0.0",
+                "--queueHost", "0.0.0.0",
+                "--tableHost", "0.0.0.0",
+                "--skipApiVersionCheck")
             .Build();
 
     /// <summary>

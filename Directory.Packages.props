@@ -8,17 +8,16 @@
     <PackageVersion Include="AWSSDK.SQS" Version="4.0.2.31" />
     <PackageVersion Include="AWSSDK.SSO" Version="4.0.2.30" />
     <PackageVersion Include="AWSSDK.SSOOIDC" Version="4.0.3.31" />
-    <!-- Pinned to a version whose default x-ms-version is supported by Azurite
-         3.35 (the floating "latest" tag we run in IT). Newer SDK builds raise
-         the default API version forward of what Azurite ships, breaking the
-         IT with InvalidHeaderValue. -->
+    <!-- Newer Azure.Storage.Blobs SDK releases tend to advance their default
+         x-ms-version ahead of what Azurite's "latest" image speaks. The IT
+         keeps working by passing the skip-api-version-check switch to
+         Azurite in AzuriteFixture; bump freely here. -->
     <PackageVersion Include="Azure.Storage.Blobs" Version="12.28.0" />
     <!-- Azure Storage Queue carries Event Grid notifications for blob changes;
-         pinned alongside Azure.Storage.Blobs 12.22 for consistency. -->
+         bumped alongside Azure.Storage.Blobs for consistency. -->
     <PackageVersion Include="Azure.Storage.Queues" Version="12.26.0" />
     <!-- Azure.Identity ships DefaultAzureCredential and ManagedIdentityCredential
-         alongside the storage SDK. Version pinned for source-build compatibility
-         with Azure.Storage.Blobs 12.22. -->
+         alongside the storage SDK. Bumped to track Azure.Storage.Blobs. -->
     <PackageVersion Include="Azure.Identity" Version="1.21.0" />
     <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.5.0" />
     <PackageVersion Include="OpenTelemetry" Version="1.15.3" />
