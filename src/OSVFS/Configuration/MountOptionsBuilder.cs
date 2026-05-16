@@ -238,7 +238,7 @@ internal static class MountOptionsBuilder
             logger.LogInformation(
                 "Mount '{Mount}': using Azure credentials from {Source}.", mount.Name, description);
             return AzureCredentialSource.FromTokenCredential(
-                mount.AccountName, new ManagedIdentityCredential(), description);
+                mount.AccountName, new ManagedIdentityCredential(ManagedIdentityId.SystemAssigned), description);
         }
 
         // hasDefaultAzureCredential
